@@ -103,10 +103,10 @@ name = "exile-league"
 version = "0.1.0"
 dependencies = [
  "exile-tool-api",
+ "exile-toolkit",
  "jiff",
  "serde",
  "serde_json",
- "ureq",
 ]
 
 [[package]]
@@ -116,6 +116,14 @@ version = "0.1.0"
 [[package]]
 name = "exile-tool-api"
 version = "0.1.0"
+
+[[package]]
+name = "exile-toolkit"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "ureq",
+]
 
 [[package]]
 name = "find-msvc-tools"

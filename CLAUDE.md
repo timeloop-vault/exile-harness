@@ -36,6 +36,8 @@ consumers of it. CLI binary name: `exile`.
 crates/
   exile-core/      agent loop, sessions, event stream — no I/O assumptions
   exile-tool-api/  Tool trait + registry (schemas as raw JSON strings)
+  exile-toolkit/   shared tool runtime: HTTP client + project UA,
+                   timestamps, test doubles (never a dep of core)
   exile-llm/       OpenAI-compatible client (vLLM, Ollama, OpenRouter)
   exile-cli/       frontend #1, bin name: exile
   exile-tools/     one lib crate + thin CLI per tool     (from milestone 3)

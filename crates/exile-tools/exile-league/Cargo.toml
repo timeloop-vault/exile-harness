@@ -12,10 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 exile-tool-api.workspace = true
-jiff.workspace = true
+exile-toolkit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ureq.workspace = true
+
+[dev-dependencies]
+jiff.workspace = true
 
 [lints]
 workspace = true

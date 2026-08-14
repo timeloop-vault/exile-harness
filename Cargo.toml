@@ -5,6 +5,7 @@ members = [
     "crates/exile-tool-api",
     "crates/exile-llm",
     "crates/exile-cli",
+    "crates/exile-toolkit",
     "crates/exile-tools/exile-league",
 ]
 
@@ -21,6 +22,7 @@ exile-core = { path = "crates/exile-core" }
 exile-league = { path = "crates/exile-tools/exile-league" }
 exile-llm = { path = "crates/exile-llm" }
 exile-tool-api = { path = "crates/exile-tool-api" }
+exile-toolkit = { path = "crates/exile-toolkit" }
 
 jiff = "0.2"
 serde = { version = "1", features = ["derive"] }
