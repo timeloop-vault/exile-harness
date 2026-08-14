@@ -1,0 +1,10 @@
+[package]
+name = "exile-tool-api"
+description = "Contract between the exile harness and its tools: Tool trait, registry, schemas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

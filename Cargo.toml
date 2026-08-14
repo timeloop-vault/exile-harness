@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/exile-core",
+    "crates/exile-tool-api",
+    "crates/exile-llm",
+    "crates/exile-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+repository = "https://github.com/timeloop-vault/exile-harness"
+
+[workspace.dependencies]
+# Kept intentionally empty for now; dependencies are added the milestone
+# that first needs them, always as workspace deps so versions stay unified.
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

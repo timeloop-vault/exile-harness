@@ -1,0 +1,14 @@
+[package]
+name = "exile-cli"
+description = "CLI frontend for the exile harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "exile"
+path = "src/main.rs"
+
+[lints]
+workspace = true
