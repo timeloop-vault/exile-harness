@@ -49,9 +49,11 @@ eval/              regression questions + runner         (from milestone 6)
   frontends are renderers of it. This is what keeps CLI/TUI/web/mobile and
   local-vs-cloud composition cheap.
 - Data freshness tiers: **A** per-patch versioned extracts (DAT/GGPK),
-  **B** cached corpora with vintage stamps (wiki, patch notes, guides),
-  **C** always live (leagues, prices, meta) — never cached beyond minutes,
-  never written into prompts.
+  **B** cached corpora with vintage stamps (wiki, patch notes, guides) —
+  concluded/immutable historical facts may be vendored inside tool crates
+  when they carry provenance (`sources` + `generated_at`) and a test
+  proving they are concluded, **C** always live (current league state,
+  prices, meta) — never cached beyond minutes, never written into prompts.
 
 ## Commands
 

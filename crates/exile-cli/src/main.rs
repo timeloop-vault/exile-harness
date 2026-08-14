@@ -106,6 +106,9 @@ fn main() -> ExitCode {
     registry
         .register(Box::new(EchoTool))
         .expect("echo tool registers into an empty registry");
+    registry
+        .register(Box::new(exile_league::LeagueTool::new()))
+        .expect("league tool name is unique");
     let mut session = Session::new(registry);
 
     let stdin = io::stdin();
