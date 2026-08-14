@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Pre-commit hook: fmt, clippy (pedantic, deny warnings), test.
+# Fails fast to keep the feedback loop short.
+set -e
+
+echo "=== pre-commit: cargo fmt ==="
+cargo fmt --all --check || {
+    echo "ERROR: formatting check failed. Run 'cargo fmt' and re-stage."
+    exit 1
+}
+
+echo "=== pre-commit: cargo clippy ==="
+cargo clippy --workspace --all-targets -- -D warnings || {
+    echo "ERROR: clippy warnings. Fix them before committing."
+    exit 1
+}
+
+echo "=== pre-commit: cargo test ==="
+cargo test --workspace --quiet || {
+    echo "ERROR: tests failed. Fix them before committing."
+    exit 1
+}
