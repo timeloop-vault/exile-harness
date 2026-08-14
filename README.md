@@ -5,14 +5,17 @@ knowledge into a model, `exile` gives the model tools: live league and economy
 data, extracted game data, wiki retrieval, and Path of Building for build math.
 The model reasons; the harness knows.
 
-**Status:** milestone 1 — workspace scaffold. The REPL, tools, and LLM
-integration land in the following milestones.
+**Status:** milestone 2 — working REPL with tool registry and event stream.
+The league resolver and LLM integration land in the following milestones.
 
 ## Quickstart
 
 ```
 cargo run -p exile-cli
 ```
+
+Inside the REPL: `/tools` lists available tools, `/call <name> <json>` runs
+one directly, `/help` shows all commands, `/quit` (or `/exit`) leaves.
 
 ## Development
 
