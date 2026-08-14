@@ -10,5 +10,9 @@ repository.workspace = true
 name = "exile"
 path = "src/main.rs"
 
+[dependencies]
+exile-core.workspace = true
+exile-tool-api.workspace = true
+
 [lints]
 workspace = true

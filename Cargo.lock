@@ -5,10 +5,17 @@ version = 4
 [[package]]
 name = "exile-cli"
 version = "0.1.0"
+dependencies = [
+ "exile-core",
+ "exile-tool-api",
+]
 
 [[package]]
 name = "exile-core"
 version = "0.1.0"
+dependencies = [
+ "exile-tool-api",
+]
 
 [[package]]
 name = "exile-llm"
