@@ -104,16 +104,35 @@ fn latest_past_league(result: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Case-insensitive containment check against the grading rule.
+/// Case-insensitive containment check against the grading rule. Purely
+/// numeric values must appear with digit boundaries, so an expected "60"
+/// does not false-pass a wrong answer containing "160".
 fn answer_matches(answer: &str, grading: &Grading) -> bool {
     let answer = answer.to_lowercase();
     match grading {
-        Grading::Any(values) => values
-            .iter()
-            .any(|value| answer.contains(&value.to_lowercase())),
-        Grading::All(values) => values
-            .iter()
-            .all(|value| answer.contains(&value.to_lowercase())),
+        Grading::Any(values) => values.iter().any(|value| value_present(&answer, value)),
+        Grading::All(values) => values.iter().all(|value| value_present(&answer, value)),
+    }
+}
+
+fn value_present(answer_lower: &str, value: &str) -> bool {
+    let value = value.to_lowercase();
+    if value.chars().all(|c| c.is_ascii_digit()) {
+        let bytes = answer_lower.as_bytes();
+        let mut search = 0;
+        while let Some(position) = answer_lower[search..].find(&value) {
+            let start = search + position;
+            let end = start + value.len();
+            let digit_before = start > 0 && bytes[start - 1].is_ascii_digit();
+            let digit_after = end < bytes.len() && bytes[end].is_ascii_digit();
+            if !digit_before && !digit_after {
+                return true;
+            }
+            search = start + 1;
+        }
+        false
+    } else {
+        answer_lower.contains(&value)
     }
 }
 
@@ -349,5 +368,25 @@ mod tests {
         let grading = Grading::All(vec!["30".to_owned(), "60".to_owned()]);
         assert!(answer_matches("-30% twice for -60% total", &grading));
         assert!(!answer_matches("-30% once", &grading));
+    }
+
+    #[test]
+    fn numeric_values_require_digit_boundaries() {
+        let grading = Grading::Any(vec!["75".to_owned()]);
+        assert!(answer_matches("the cap is 75%", &grading));
+        assert!(answer_matches("cap: 75.", &grading));
+        assert!(
+            !answer_matches("the cap is 175%", &grading),
+            "175 is not 75"
+        );
+        assert!(!answer_matches("worth 750 gold", &grading), "750 is not 75");
+
+        let sixty = Grading::Any(vec!["60".to_owned()]);
+        assert!(!answer_matches("a total of -160%", &sixty), "160 is not 60");
+        assert!(answer_matches("a total of -60%", &sixty));
+
+        // Non-numeric values keep plain substring behavior.
+        let text = Grading::Any(vec!["additive".to_owned()]);
+        assert!(answer_matches("they stack additively", &text));
     }
 }

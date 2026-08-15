@@ -65,6 +65,15 @@ impl Config {
                 config.default_profile
             ));
         }
+        for (name, profile) in &config.profiles {
+            if let Some(temperature) = profile.temperature
+                && !(temperature.is_finite() && (0.0..=2.0).contains(&temperature))
+            {
+                return Err(format!(
+                    "profile `{name}`: temperature must be a finite number between 0 and 2"
+                ));
+            }
+        }
         Ok(config)
     }
 

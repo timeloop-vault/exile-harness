@@ -1,8 +1,12 @@
 # Seed regression questions — the facts a model answers wrong from memory.
 #
-# Assertions never hardcode game facts (project law #1 applies to the eval
-# too): ground truth is resolved live from the league tool at eval time,
-# so these questions stay valid across league flips without edits.
+# Two grading regimes, matching the data-freshness tiers:
+# - VOLATILE facts (league state) are never hardcoded: ground truth is
+#   resolved live from the league tool at eval time, so those questions
+#   survive league flips without edits.
+# - STABLE mechanics facts are vendored expectations with provenance (the
+#   sanctioned Tier-B pattern) — see the mechanics section header for
+#   sources.
 
 [[questions]]
 id = "current-league-poe1"
@@ -44,6 +48,16 @@ values = ["can't", "cannot", "unable", "no tool", "don't have", "do not have", "
 # (they were the observed fine-tuning failures). The harness must answer
 # them via the wiki tool. Stable across leagues; re-verify only on major
 # mechanics reworks.
+#
+# Primary public sources (content re-verified live through the wiki tool
+# during eval runs on 2026-08-15):
+# - https://www.poewiki.net/wiki/Resistance — default 75% cap, 90% hard
+#   cap, -200% floor, Kitava -30%/-30% (-60% total) incl. chaos, damage
+#   taken at 75% res
+# - poewiki.net modifier keyword pages ("More", "Increased", "Less") and
+#   support-gem documentation — additive vs multiplicative stacking
+# - poewiki.net item/affix documentation — rare items: up to 6 explicit
+#   modifiers (3 prefixes + 3 suffixes)
 #
 # NOTE (project law 2): the *-math questions are INTERIM probes — they
 # test that the model states combination rules correctly, but LLM
