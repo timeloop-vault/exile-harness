@@ -16,13 +16,10 @@ use exile_core::{Event, Session};
 use exile_llm::{Config, OpenAiClient};
 use exile_tool_api::{Tool, ToolError, ToolRegistry};
 
-/// Minimal policy-only prompt until the real agent definition lands in
-/// milestone 5. Contains no game facts (project law #1).
-const SYSTEM_PROMPT: &str = "You are exile, an assistant for Path of Exile 1 and Path of \
-    Exile 2. For ANY fact about game state - current or past leagues, prices, mechanics, \
-    dates, patch details - call the provided tools and answer from their results; never \
-    answer such questions from memory. When stating facts, mention the tool's source and \
-    fetched_at. If no tool can answer, say so plainly instead of guessing.";
+/// The agent definition, maintained as Markdown in `prompts/` (project
+/// convention: prompts are content, embedded at build time — never inline
+/// strings). Contains no game facts (project law #1).
+const SYSTEM_PROMPT: &str = include_str!("../../../prompts/exile.md");
 
 /// Demo tool so the tool path can be exercised without network access.
 /// Returns its arguments unchanged.

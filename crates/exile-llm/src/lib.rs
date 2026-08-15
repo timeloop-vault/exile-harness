@@ -23,9 +23,9 @@ use serde_json::{Value, json};
 pub use config::{Config, Profile, ToolMode};
 
 /// Instructions appended to the system prompt in prompted tool mode.
-const PROMPTED_TOOL_INSTRUCTIONS: &str = "\n\nTo call a tool, reply with ONLY a JSON object of \
-    the form {\"tool_call\": {\"name\": \"<tool name>\", \"arguments\": { ... }}} and nothing \
-    else. You will receive the result and can then answer. Available tools:\n";
+/// Maintained as Markdown in `prompts/` (project convention: prompts are
+/// content, embedded at build time — never inline strings).
+const PROMPTED_TOOL_INSTRUCTIONS: &str = include_str!("../../../prompts/prompted-tool-calling.md");
 
 /// Hard cap on distinct tool calls accepted from one streamed response;
 /// the accumulator is sized by server-controlled data, so it must be
@@ -177,7 +177,10 @@ impl OpenAiClient {
                 body
             }
             ToolMode::Prompted => {
-                let mut prompt = format!("{system_prompt}{PROMPTED_TOOL_INSTRUCTIONS}");
+                let mut prompt = format!(
+                    "{system_prompt}\n\n{}\n",
+                    PROMPTED_TOOL_INSTRUCTIONS.trim_end()
+                );
                 for tool in tools {
                     let _ = writeln!(
                         prompt,

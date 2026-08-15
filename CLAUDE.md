@@ -41,7 +41,9 @@ crates/
   exile-llm/       OpenAI-compatible client (vLLM, Ollama, OpenRouter)
   exile-cli/       frontend #1, bin name: exile
   exile-tools/     one lib crate + thin CLI per tool     (from milestone 3)
-prompts/           agent definitions                     (from milestone 5)
+prompts/           agent + protocol prompts as Markdown, embedded at
+                   build time via include_str! — prompts are content,
+                   never inline strings in Rust
 eval/              regression questions + runner         (from milestone 6)
 ```
 
