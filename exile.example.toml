@@ -1,0 +1,30 @@
+# Model endpoint profiles for the exile harness.
+#
+# Copy to exile.toml (gitignored) and fill in your endpoints. Endpoints are
+# private infrastructure — never commit the real file. API keys are read
+# from the named environment variable, never written here.
+
+default_profile = "local-ollama"
+
+[profiles.local-ollama]
+base_url = "http://<ollama-host>:11434/v1"
+model = "<model-name>"        # e.g. a large qwen for native tool calling
+tool_mode = "native"
+
+[profiles.local-vllm]
+base_url = "http://<vllm-host>:8000/v1"
+model = "<served-model-name>"
+tool_mode = "native"
+
+[profiles.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-sonnet-5"
+api_key_env = "OPENROUTER_API_KEY"
+tool_mode = "native"
+
+# For small models whose native function calling is unreliable: tools are
+# described in the prompt and calls parsed from the reply.
+[profiles.small-prompted]
+base_url = "http://<ollama-host>:11434/v1"
+model = "<small-model-name>"
+tool_mode = "prompted"

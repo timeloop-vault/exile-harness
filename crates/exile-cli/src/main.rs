@@ -1,20 +1,31 @@
 //! `exile` — CLI frontend for the exile harness.
 //!
 //! Frontend #1: a thin shell over `exile-core` that reads lines from stdin
-//! and renders the harness event stream to stdout. Deliberately dependency
-//! free; richer line editing can come later without touching the core.
+//! and renders the harness event stream to stdout. With a config
+//! (`exile.toml`, see `exile.example.toml`) chat is driven by the
+//! configured model; without one the REPL runs in tool-only mode.
 //!
 //! All stdout writes are fallible: when stdout closes (e.g. a pager quits),
 //! the REPL exits cleanly instead of panicking on a broken pipe.
 
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use exile_core::{Event, Session};
+use exile_llm::{Config, OpenAiClient};
 use exile_tool_api::{Tool, ToolError, ToolRegistry};
 
-/// Demo tool so the tool path can be exercised before real tools land in
-/// milestone 3. Returns its arguments unchanged.
+/// Minimal policy-only prompt until the real agent definition lands in
+/// milestone 5. Contains no game facts (project law #1).
+const SYSTEM_PROMPT: &str = "You are exile, an assistant for Path of Exile 1 and Path of \
+    Exile 2. For ANY fact about game state - current or past leagues, prices, mechanics, \
+    dates, patch details - call the provided tools and answer from their results; never \
+    answer such questions from memory. When stating facts, mention the tool's source and \
+    fetched_at. If no tool can answer, say so plainly instead of guessing.";
+
+/// Demo tool so the tool path can be exercised without network access.
+/// Returns its arguments unchanged.
 struct EchoTool;
 
 impl Tool for EchoTool {
@@ -92,16 +103,44 @@ fn parse_command(raw: &str) -> Command<'_> {
     Command::Chat(line)
 }
 
-fn main() -> ExitCode {
-    let version = env!("CARGO_PKG_VERSION");
-    if writeln_out(&format!(
-        "exile {version} — type /help for commands, /quit to exit"
-    ))
-    .is_err()
-    {
-        return ExitCode::SUCCESS;
-    }
+/// Command-line options for the `exile` binary.
+struct Options {
+    config_path: String,
+    /// Whether `--config` was passed explicitly: a missing explicit path
+    /// is an error, while a missing default path means tool-only mode.
+    config_explicit: bool,
+    profile: Option<String>,
+}
 
+fn parse_options(args: impl Iterator<Item = String>) -> Result<Options, String> {
+    let mut config_path = "exile.toml".to_owned();
+    let mut config_explicit = false;
+    let mut profile = None;
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--config" => {
+                config_path = args.next().ok_or("--config requires a path")?;
+                config_explicit = true;
+            }
+            "--profile" => {
+                profile = Some(args.next().ok_or("--profile requires a name")?);
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument `{other}` (usage: exile [--config <path>] [--profile <name>])"
+                ));
+            }
+        }
+    }
+    Ok(Options {
+        config_path,
+        config_explicit,
+        profile,
+    })
+}
+
+fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry
         .register(Box::new(EchoTool))
@@ -109,7 +148,66 @@ fn main() -> ExitCode {
     registry
         .register(Box::new(exile_league::LeagueTool::new()))
         .expect("league tool name is unique");
-    let mut session = Session::new(registry);
+    registry
+}
+
+/// Build the session (with or without a model) and its banner line.
+fn build_session(options: &Options) -> Result<(Session, String), String> {
+    let registry = build_registry();
+    if Path::new(&options.config_path).exists() {
+        let config = Config::load(Path::new(&options.config_path))?;
+        let (profile_name, profile) = config.profile(options.profile.as_deref())?;
+        let client = OpenAiClient::for_profile(profile)?;
+        let line = format!("model: {} via {profile_name}", client.model());
+        Ok((
+            Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned()),
+            line,
+        ))
+    } else {
+        if options.config_explicit {
+            return Err(format!("--config {} does not exist", options.config_path));
+        }
+        if let Some(profile) = &options.profile {
+            return Err(format!(
+                "--profile {profile} given but no config found at {}",
+                options.config_path
+            ));
+        }
+        Ok((
+            Session::new(registry),
+            format!(
+                "no model configured (copy exile.example.toml to {})",
+                options.config_path
+            ),
+        ))
+    }
+}
+
+fn main() -> ExitCode {
+    let options = match parse_options(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let (mut session, model_line) = match build_session(&options) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("config error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let version = env!("CARGO_PKG_VERSION");
+    if writeln_out(&format!(
+        "exile {version} — {model_line} — /help for commands, /quit to exit"
+    ))
+    .is_err()
+    {
+        return ExitCode::SUCCESS;
+    }
 
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
@@ -189,7 +287,7 @@ fn print_help() -> io::Result<()> {
         "  /call <name> <json> run a tool directly (json defaults to {{}})"
     )?;
     writeln!(out, "  /quit (or /exit)    exit")?;
-    writeln!(out, "  anything else       talk to the harness")
+    writeln!(out, "  anything else       talk to the model")
 }
 
 fn print_tools(session: &Session) -> io::Result<()> {
@@ -315,5 +413,20 @@ mod tests {
             parse_command("what league is it?"),
             Command::Chat("what league is it?")
         );
+    }
+
+    #[test]
+    fn options_parse_flags_and_reject_unknown() {
+        let options = parse_options(
+            ["--config", "x.toml", "--profile", "p"]
+                .map(String::from)
+                .into_iter(),
+        )
+        .expect("parses");
+        assert_eq!(options.config_path, "x.toml");
+        assert_eq!(options.profile.as_deref(), Some("p"));
+
+        assert!(parse_options(["--config"].map(String::from).into_iter()).is_err());
+        assert!(parse_options(["--bogus"].map(String::from).into_iter()).is_err());
     }
 }

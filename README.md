@@ -5,9 +5,11 @@ knowledge into a model, `exile` gives the model tools: live league and economy
 data, extracted game data, wiki retrieval, and Path of Building for build math.
 The model reasons; the harness knows.
 
-**Status:** milestone 3 — REPL plus the first real tool: the league
-resolver (`/call league {"game":"poe1"}` in the REPL, or the standalone
-`exile-league` binary). LLM integration lands next.
+**Status:** milestone 4 — the full loop works: chat drives a configured
+model (any OpenAI-compatible endpoint: Ollama, vLLM, OpenRouter), which
+calls the harness tools and answers with cited sources. Copy
+`exile.example.toml` to `exile.toml` to enable a model; without one the
+REPL runs in tool-only mode (`/call league {"game":"poe1"}`).
 
 ## Quickstart
 
