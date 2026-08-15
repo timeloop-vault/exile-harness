@@ -146,6 +146,9 @@ fn build_registry() -> ToolRegistry {
         .register(Box::new(exile_league::LeagueTool::new()))
         .expect("league tool name is unique");
     registry
+        .register(Box::new(exile_wiki::WikiTool::new()))
+        .expect("wiki tool name is unique");
+    registry
 }
 
 /// Build the session (with or without a model) and its banner line.

@@ -4,18 +4,70 @@
 //! their implementations share, so it is written once instead of drifting
 //! per copy: the [`HttpGet`] abstraction with the live [`UreqHttp`] client
 //! (project User-Agent, request timeout), UTC timestamps for `fetched_at`
-//! stamps, and reusable HTTP test doubles in [`testing`].
+//! stamps, the shared [`Game`] parameter type (project law 3), URL
+//! [`percent_encode`], and reusable HTTP test doubles in [`testing`].
 //!
 //! Deliberately separate from `exile-tool-api`: the contract crate stays
 //! dependency-free (`exile-core` depends on it and must carry no I/O),
 //! while this crate owns the heavier runtime deps (ureq, jiff) that only
 //! tool implementations need.
 
+use std::fmt;
 use std::time::Duration;
+
+use serde::Deserialize;
 
 /// User-Agent for all outbound requests: poe.ninja and GGG both require a
 /// descriptive UA; the repo URL is the contact channel.
 pub const USER_AGENT: &str = "exile-harness/0.1 (+https://github.com/timeloop-vault/exile-harness)";
+
+/// Which game a tool call targets. Project law 3: Path of Exile 1 and 2
+/// are first-class and separate — every game-scoped tool takes this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum Game {
+    /// Path of Exile 1.
+    #[serde(rename = "poe1")]
+    Poe1,
+    /// Path of Exile 2.
+    #[serde(rename = "poe2")]
+    Poe2,
+}
+
+impl Game {
+    /// The lowercase API identifier (`poe1` | `poe2`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Poe1 => "poe1",
+            Self::Poe2 => "poe2",
+        }
+    }
+}
+
+impl fmt::Display for Game {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Percent-encode a string for use inside a URL query value (RFC 3986
+/// unreserved characters pass through; everything else is `%XX`-encoded,
+/// including spaces).
+#[must_use]
+pub fn percent_encode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char);
+            }
+            other => {
+                let _ = fmt::Write::write_fmt(&mut out, format_args!("%{other:02X}"));
+            }
+        }
+    }
+    out
+}
 
 /// Minimal HTTP-GET abstraction so tools can be tested with canned
 /// responses and never touch the network in unit tests.
@@ -128,5 +180,19 @@ mod tests {
     #[test]
     fn fail_http_always_fails() {
         assert!(FailHttp.get("https://example.com").is_err());
+    }
+
+    #[test]
+    fn percent_encoding_covers_reserved_and_utf8() {
+        assert_eq!(super::percent_encode("plain-safe_1.0~"), "plain-safe_1.0~");
+        assert_eq!(super::percent_encode("a b&c=d"), "a%20b%26c%3Dd");
+        assert_eq!(super::percent_encode("Kitava's"), "Kitava%27s");
+        assert_eq!(super::percent_encode("é"), "%C3%A9");
+    }
+
+    #[test]
+    fn game_ids_are_stable() {
+        assert_eq!(super::Game::Poe1.to_string(), "poe1");
+        assert_eq!(super::Game::Poe2.as_str(), "poe2");
     }
 }

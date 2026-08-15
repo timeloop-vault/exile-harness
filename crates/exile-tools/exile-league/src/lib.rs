@@ -14,43 +14,14 @@
 mod past;
 mod sources;
 
-use std::fmt;
-
 use exile_tool_api::{Tool, ToolError};
 use exile_toolkit::{HttpGet, UreqHttp, now_utc};
 use serde::Deserialize;
 use serde_json::Value;
 
+pub use exile_toolkit::Game;
 pub use past::PastLeague;
 pub use sources::CurrentLeague;
-
-/// Which game to resolve leagues for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum Game {
-    /// Path of Exile 1.
-    #[serde(rename = "poe1")]
-    Poe1,
-    /// Path of Exile 2.
-    #[serde(rename = "poe2")]
-    Poe2,
-}
-
-impl Game {
-    /// The lowercase API identifier (`poe1` | `poe2`).
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Poe1 => "poe1",
-            Self::Poe2 => "poe2",
-        }
-    }
-}
-
-impl fmt::Display for Game {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 
 /// Which league sets to include in the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
