@@ -1,0 +1,23 @@
+[package]
+name = "exile-league"
+description = "League resolver tool: live current leagues + vendored concluded leagues for PoE 1 and 2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "exile-league"
+path = "src/main.rs"
+
+[dependencies]
+exile-tool-api.workspace = true
+exile-toolkit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jiff.workspace = true
+
+[lints]
+workspace = true

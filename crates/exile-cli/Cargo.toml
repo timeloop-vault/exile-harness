@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 exile-core.workspace = true
+exile-league.workspace = true
 exile-tool-api.workspace = true
 
 [lints]

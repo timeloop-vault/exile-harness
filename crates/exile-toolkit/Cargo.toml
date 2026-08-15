@@ -1,0 +1,14 @@
+[package]
+name = "exile-toolkit"
+description = "Shared runtime for exile harness tools: HTTP with the project UA, timestamps, test doubles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+jiff.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

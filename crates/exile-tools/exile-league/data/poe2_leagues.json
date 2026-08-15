@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-08-14",
+  "sources": [
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=League&format=json&prop=wikitext",
+    "https://www.poe2wiki.net/w/api.php?action=cargoquery&format=json&tables=events&fields=_pageName=page,name,id,short_name,release_date,end_date,release_version,is_hardcore,is_standard,type&order_by=events.release_date%20ASC&limit=500",
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=Early%20Access&format=json&prop=wikitext",
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=Event&format=json&prop=wikitext",
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=Dawn%20of%20the%20Hunt%20league&format=json&prop=wikitext",
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=Rise%20of%20the%20Abyssal%20league&format=json&prop=wikitext",
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=Fate%20of%20the%20Vaal%20league&format=json&prop=wikitext",
+    "https://www.poe2wiki.net/w/api.php?action=parse&page=Runes%20of%20Aldur%20league&format=json&prop=wikitext"
+  ],
+  "leagues": [
+    { "name": "Dawn of the Hunt", "version": "0.2", "hardcore": false, "start_date": "2025-04-04", "end_date": "2025-08-26" },
+    { "name": "Rise of the Abyssal", "version": "0.3", "hardcore": false, "start_date": "2025-08-29", "end_date": "2025-12-09" },
+    { "name": "Fate of the Vaal", "version": "0.4", "hardcore": false, "start_date": "2025-12-12", "end_date": "2026-05-25" }
+  ]
+}

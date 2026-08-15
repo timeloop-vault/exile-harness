@@ -5,6 +5,8 @@ members = [
     "crates/exile-tool-api",
     "crates/exile-llm",
     "crates/exile-cli",
+    "crates/exile-toolkit",
+    "crates/exile-tools/exile-league",
 ]
 
 [workspace.package]
@@ -17,8 +19,15 @@ repository = "https://github.com/timeloop-vault/exile-harness"
 # External dependencies are added the milestone that first needs them,
 # always as workspace deps so versions stay unified.
 exile-core = { path = "crates/exile-core" }
+exile-league = { path = "crates/exile-tools/exile-league" }
 exile-llm = { path = "crates/exile-llm" }
 exile-tool-api = { path = "crates/exile-tool-api" }
+exile-toolkit = { path = "crates/exile-toolkit" }
+
+jiff = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
