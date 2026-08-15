@@ -69,5 +69,8 @@ eval/              regression questions + runner         (from milestone 6)
 
 - `main` is protected; every change lands via a milestone-sized PR for
   review.
+- Branch/commit conventions: `.claude/skills/git-workflow`. PR flow:
+  `.claude/skills/pr-workflow`. Review comments:
+  `.claude/skills/pr-review-address`.
 - Use the `gh` CLI for GitHub operations. If it is not on PATH, search the
   platform's usual install locations or ask the user where it lives.
