@@ -7,8 +7,13 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Deserialize;
+
+/// Default idle-stream timeout: long enough for local hardware to chew a
+/// large prompt before the first token, short enough to catch true stalls.
+pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_mins(3);
 
 /// Whole config file: a default profile name plus named profiles.
 #[derive(Debug, Deserialize)]
@@ -18,6 +23,18 @@ pub struct Config {
     pub default_profile: String,
     /// Named endpoint profiles.
     pub profiles: BTreeMap<String, Profile>,
+    /// Harness-level limits (apply regardless of profile).
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+/// Harness-level limits.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Limits {
+    /// Max model→tools→model rounds per turn (default 8).
+    #[serde(default)]
+    pub max_tool_rounds: Option<usize>,
 }
 
 /// One model endpoint.
@@ -38,6 +55,14 @@ pub struct Profile {
     /// 0 for reproducibility unless a profile sets one explicitly.
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Seconds of stream *silence* before a request fails (default 180).
+    /// Active streaming is never interrupted by this.
+    #[serde(default)]
+    pub idle_timeout_secs: Option<u64>,
+    /// Optional wall-clock ceiling in seconds for one whole completion
+    /// request. The eval forces 600 unless a profile sets one.
+    #[serde(default)]
+    pub request_timeout_secs: Option<u64>,
 }
 
 /// How tool definitions reach the model.
@@ -73,6 +98,17 @@ impl Config {
                     "profile `{name}`: temperature must be a finite number between 0 and 2"
                 ));
             }
+            if profile.idle_timeout_secs == Some(0) {
+                return Err(format!("profile `{name}`: idle_timeout_secs must be > 0"));
+            }
+            if profile.request_timeout_secs == Some(0) {
+                return Err(format!(
+                    "profile `{name}`: request_timeout_secs must be > 0"
+                ));
+            }
+        }
+        if config.limits.max_tool_rounds == Some(0) {
+            return Err("limits.max_tool_rounds must be > 0".to_owned());
         }
         Ok(config)
     }
@@ -106,6 +142,19 @@ impl Profile {
                 format!("api_key_env `{var}` cannot be read ({err}); export it or remove it from the profile")
             }),
         }
+    }
+
+    /// The idle-stream timeout (default 180s).
+    #[must_use]
+    pub fn idle_timeout(&self) -> Duration {
+        self.idle_timeout_secs
+            .map_or(DEFAULT_IDLE_TIMEOUT, Duration::from_secs)
+    }
+
+    /// The whole-request ceiling, when configured.
+    #[must_use]
+    pub fn request_timeout(&self) -> Option<Duration> {
+        self.request_timeout_secs.map(Duration::from_secs)
     }
 }
 
@@ -158,6 +207,23 @@ tool_mode = "prompted"
         hosted.api_key_env = Some("EXILE_TEST_DEFINITELY_UNSET_VARIABLE".to_owned());
         let err = hosted.api_key().expect_err("unset variable must error");
         assert!(err.contains("EXILE_TEST_DEFINITELY_UNSET_VARIABLE"));
+    }
+
+    #[test]
+    fn limits_and_timeouts_parse_and_validate() {
+        let with_limits = format!("{EXAMPLE}\n[limits]\nmax_tool_rounds = 4\n");
+        let config: Config = toml::from_str(&with_limits).expect("parses");
+        assert_eq!(config.limits.max_tool_rounds, Some(4));
+
+        let (_, local) = config.profile(None).expect("resolves");
+        assert_eq!(local.idle_timeout(), Duration::from_mins(3));
+        assert_eq!(local.request_timeout(), None);
+
+        let mut tweaked = config.profiles["local"].clone();
+        tweaked.idle_timeout_secs = Some(30);
+        tweaked.request_timeout_secs = Some(120);
+        assert_eq!(tweaked.idle_timeout(), Duration::from_secs(30));
+        assert_eq!(tweaked.request_timeout(), Some(Duration::from_mins(2)));
     }
 
     #[test]

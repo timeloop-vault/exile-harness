@@ -159,10 +159,11 @@ fn build_session(options: &Options) -> Result<(Session, String), String> {
         let (profile_name, profile) = config.profile(options.profile.as_deref())?;
         let client = OpenAiClient::for_profile(profile)?;
         let line = format!("model: {} via {profile_name}", client.model());
-        Ok((
-            Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned()),
-            line,
-        ))
+        let mut session = Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned());
+        if let Some(rounds) = config.limits.max_tool_rounds {
+            session.set_max_tool_rounds(rounds);
+        }
+        Ok((session, line))
     } else {
         if options.config_explicit {
             return Err(format!("--config {} does not exist", options.config_path));

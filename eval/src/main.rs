@@ -165,7 +165,11 @@ fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Grading, Strin
 
 /// Run one question through a fresh session; returns the assistant's full
 /// text, or an error description if the turn failed.
-fn ask(profile: &exile_llm::Profile, question: &str) -> Result<String, String> {
+fn ask(
+    profile: &exile_llm::Profile,
+    max_tool_rounds: Option<usize>,
+    question: &str,
+) -> Result<String, String> {
     // Mirror the CLI's tool registry so the eval grades the real thing.
     let mut registry = ToolRegistry::new();
     registry
@@ -176,6 +180,9 @@ fn ask(profile: &exile_llm::Profile, question: &str) -> Result<String, String> {
         .expect("wiki tool name is unique");
     let client = OpenAiClient::for_profile(profile)?;
     let mut session = Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned());
+    if let Some(rounds) = max_tool_rounds {
+        session.set_max_tool_rounds(rounds);
+    }
 
     let mut answer = String::new();
     let mut failure: Option<String> = None;
@@ -235,11 +242,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Reproducibility: grade at temperature 0 unless the profile pins one.
+    // Reproducibility: grade at temperature 0 unless the profile pins one,
+    // and bound each completion so a stalled endpoint fails instead of
+    // blocking the whole run.
     let mut profile = profile.clone();
     if profile.temperature.is_none() {
         profile.temperature = Some(0.0);
     }
+    if profile.request_timeout_secs.is_none() {
+        profile.request_timeout_secs = Some(600);
+    }
+    let max_tool_rounds = config.limits.max_tool_rounds;
     let profile = &profile;
     let file: QuestionFile = toml::from_str(QUESTIONS).expect("questions.toml is pinned by tests");
     let ground_truth_tool = exile_league::LeagueTool::new();
@@ -269,7 +282,7 @@ fn main() -> ExitCode {
                 continue;
             }
         };
-        match ask(profile, &question.prompt) {
+        match ask(profile, max_tool_rounds, &question.prompt) {
             Err(err) => {
                 failures += 1;
                 println!("FAIL {} — {err}", question.id);

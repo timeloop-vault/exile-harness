@@ -6,6 +6,16 @@
 
 default_profile = "local-ollama"
 
+# Harness-level limits (optional section).
+# [limits]
+# max_tool_rounds = 8           # model→tools→model rounds per turn
+
+# Per-profile optional timeouts:
+#   idle_timeout_secs = 180     # stream *silence* budget; active streaming
+#                               # is never interrupted (default 180)
+#   request_timeout_secs = 600  # wall-clock ceiling per completion; unset
+#                               # by default (the eval forces 600)
+
 [profiles.local-ollama]
 base_url = "http://<ollama-host>:11434/v1"
 model = "<model-name>"        # e.g. a large qwen for native tool calling
