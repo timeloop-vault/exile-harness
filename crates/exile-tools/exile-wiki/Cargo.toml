@@ -1,21 +1,20 @@
 [package]
-name = "exile-cli"
-description = "CLI frontend for the exile harness"
+name = "exile-wiki"
+description = "Wiki retrieval tool: search + article text from the community wikis for PoE 1 and 2"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "exile"
+name = "exile-wiki"
 path = "src/main.rs"
 
 [dependencies]
-exile-core.workspace = true
-exile-league.workspace = true
-exile-llm.workspace = true
 exile-tool-api.workspace = true
-exile-wiki.workspace = true
+exile-toolkit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

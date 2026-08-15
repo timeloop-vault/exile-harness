@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 jiff.workspace = true
+serde.workspace = true
 ureq.workspace = true
 
 [lints]

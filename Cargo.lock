@@ -96,6 +96,7 @@ dependencies = [
  "exile-league",
  "exile-llm",
  "exile-tool-api",
+ "exile-wiki",
 ]
 
 [[package]]
@@ -150,7 +151,18 @@ name = "exile-toolkit"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "serde",
  "ureq",
+]
+
+[[package]]
+name = "exile-wiki"
+version = "0.1.0"
+dependencies = [
+ "exile-tool-api",
+ "exile-toolkit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
