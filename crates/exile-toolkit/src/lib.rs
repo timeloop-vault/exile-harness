@@ -107,11 +107,75 @@ impl HttpGet for UreqHttp {
             .agent
             .get(url)
             .call()
-            .map_err(|err| format!("GET {url} failed: {err}"))?;
+            .map_err(|err| describe_get_error(url, &err))?;
         response
             .body_mut()
             .read_to_string()
             .map_err(|err| format!("reading body of {url} failed: {err}"))
+    }
+}
+
+/// Render a request error, normalizing HTTP status failures to the
+/// stable `http status: NNN` form. Downstream code matches on that
+/// substring (e.g. the price tool's 404 endpoint fallback), so the
+/// format is a contract pinned here and by test — not an accident of
+/// ureq's error `Display`.
+fn describe_get_error(url: &str, err: &ureq::Error) -> String {
+    match err {
+        ureq::Error::StatusCode(code) => format!("GET {url} failed: http status: {code}"),
+        other => format!("GET {url} failed: {other}"),
+    }
+}
+
+/// TTL response cache over an [`HttpGet`], for endpoints whose data is
+/// server-cached anyway (e.g. poe.ninja's ~5-minute economy snapshots):
+/// repeat lookups within the window are served locally, which is both
+/// faster and the polite client behavior the API docs ask for.
+/// Successful bodies are cached per URL; errors are never cached. Expired
+/// entries are evicted on insert, bounding the cache to URLs fetched
+/// within one TTL window (bodies run to hundreds of kilobytes).
+pub struct CachedHttp {
+    inner: Box<dyn HttpGet>,
+    ttl: Duration,
+    entries: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, String)>>,
+}
+
+impl CachedHttp {
+    /// Wrap `inner` with a per-URL TTL cache.
+    #[must_use]
+    pub fn new(inner: Box<dyn HttpGet>, ttl: Duration) -> Self {
+        Self {
+            inner,
+            ttl,
+            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+impl HttpGet for CachedHttp {
+    fn get(&self, url: &str) -> Result<String, String> {
+        // Poisoning is recovered, not propagated: the map only ever holds
+        // complete (Instant, body) pairs, so the worst a panicking peer
+        // leaves behind is a valid cache we can keep using.
+        {
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((stored_at, body)) = entries.get(url)
+                && stored_at.elapsed() < self.ttl
+            {
+                return Ok(body.clone());
+            }
+        }
+        let body = self.inner.get(url)?;
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.retain(|_, (stored_at, _)| stored_at.elapsed() < self.ttl);
+        entries.insert(url.to_owned(), (std::time::Instant::now(), body.clone()));
+        Ok(body)
     }
 }
 
@@ -180,6 +244,83 @@ mod tests {
     #[test]
     fn fail_http_always_fails() {
         assert!(FailHttp.get("https://example.com").is_err());
+    }
+
+    #[test]
+    fn status_errors_have_a_stable_format() {
+        // Contract test: the price tool's 404 endpoint fallback matches
+        // this exact substring.
+        assert_eq!(
+            super::describe_get_error("https://x/y", &ureq::Error::StatusCode(404)),
+            "GET https://x/y failed: http status: 404"
+        );
+    }
+
+    #[test]
+    fn cached_http_serves_repeats_and_never_caches_errors() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        struct Counting {
+            calls: Arc<AtomicUsize>,
+            fail: bool,
+        }
+        impl HttpGet for Counting {
+            fn get(&self, url: &str) -> Result<String, String> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if self.fail {
+                    Err("down".to_owned())
+                } else {
+                    Ok(format!("body for {url}"))
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = super::CachedHttp::new(
+            Box::new(Counting {
+                calls: Arc::clone(&calls),
+                fail: false,
+            }),
+            Duration::from_mins(1),
+        );
+        assert!(cache.get("https://x/a").is_ok());
+        assert!(cache.get("https://x/a").is_ok());
+        assert!(cache.get("https://x/b").is_ok());
+        // Two distinct URLs → two upstream calls; the repeat was cached.
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let failures = Arc::new(AtomicUsize::new(0));
+        let cache = super::CachedHttp::new(
+            Box::new(Counting {
+                calls: Arc::clone(&failures),
+                fail: true,
+            }),
+            Duration::from_mins(1),
+        );
+        assert!(cache.get("https://x/a").is_err());
+        assert!(cache.get("https://x/a").is_err());
+        // Errors are never cached: both attempts hit upstream.
+        assert_eq!(failures.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cached_http_evicts_expired_entries_on_insert() {
+        use std::time::Duration;
+        struct Ok200;
+        impl HttpGet for Ok200 {
+            fn get(&self, _url: &str) -> Result<String, String> {
+                Ok("body".to_owned())
+            }
+        }
+
+        // Zero TTL: every entry is expired by the next insert, so the map
+        // never holds more than the entry just written.
+        let cache = super::CachedHttp::new(Box::new(Ok200), Duration::ZERO);
+        for url in ["https://x/a", "https://x/b", "https://x/c"] {
+            assert!(cache.get(url).is_ok());
+            assert_eq!(cache.entries.lock().expect("lock").len(), 1);
+        }
     }
 
     #[test]

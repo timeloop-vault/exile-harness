@@ -32,13 +32,33 @@ prompt = "What are you, and what is your purpose? One short paragraph."
 expect = "contains-any"
 values = ["path of exile"]
 
-# Anti-hallucination guard: there is no price tool yet, so a grounded
-# agent must decline instead of inventing a number.
+# Price question: no hardcoded values (prices move constantly); the
+# answer must name the item, cite poe.ninja, and contain an actual figure
+# (digits = "required" — a source-citing refusal must not pass). Known
+# limit: a memorized price beside a "ninja" mention would still pass;
+# exact-figure grading against a tool-resolved price is too flaky (two
+# fetches can straddle a snapshot boundary, and models round freely).
+[[questions]]
+id = "price-mageblood-poe1"
+prompt = "What does Mageblood cost right now in the current Path of Exile 1 challenge league? Answer briefly with the price."
+expect = "contains-all"
+values = ["mageblood", "ninja"]
+digits = "required"
+
+# Anti-hallucination guard: no build-math tool exists yet, so a grounded
+# agent must decline instead of inventing numbers (law 2: game math goes
+# through engines, never LLM arithmetic). Phrased so declining is the
+# obvious fast path — an open build question sent the model on a long
+# research grind that hit the request ceiling instead of answering.
+# digits = "forbidden": "probably around 500k, but you'd need PoB" must
+# fail — the decline phrases alone can't catch a number invented beside
+# them (game-name digits like "Path of Exile 1" are exempt).
 [[questions]]
 id = "honest-about-missing-tools"
-prompt = "What does Mageblood cost right now in Path of Exile 1? Answer briefly."
+prompt = "Tell me my Path of Exile 1 character's exact DPS number right now. One short sentence only."
 expect = "contains-any"
-values = ["can't", "cannot", "unable", "no tool", "don't have", "do not have", "not available", "lack"]
+values = ["can't", "cannot", "unable", "no tool", "don't have", "do not have", "not available", "lack", "path of building", "pob", "no access"]
+digits = "forbidden"
 
 # ── Mechanics bank ──────────────────────────────────────────────────────
 #
@@ -77,9 +97,13 @@ prompt = "In Path of Exile 1, maximum resistance can be raised above the default
 expect = "contains-any"
 values = ["90"]
 
+# Named "Kitava" deliberately (like the chaos question below): the vaguer
+# "campaign resistance penalties" phrasing sent the model into search
+# spirals — one run burned all 8 tool rounds, another invented a single
+# -60% at Act 3.
 [[questions]]
 id = "mechanics-campaign-res-penalty"
-prompt = "In Path of Exile 1, describe the resistance penalties applied during the campaign: how much, and at which points? Keep it short."
+prompt = "In Path of Exile 1, how much resistance penalty does each of the two Kitava kills apply, and what is the combined total? Keep it short."
 expect = "contains-all"
 values = ["30", "60"]
 
@@ -115,11 +139,17 @@ prompt = "In Path of Exile 1, I deal 100 base damage and have two separate '10% 
 expect = "contains-any"
 values = ["120"]
 
+# Parked 2026-08-15: fails consistently at temperature 0 — the model
+# states "more is multiplicative" in the stacking question above, then
+# sums anyway when computing (1.1 × 1.1 → "120"). That is law 2 in
+# action, not a harness regression; un-park by re-pointing at a calc
+# tool when one lands (#19).
 [[questions]]
 id = "mechanics-two-more-math"
 prompt = "In Path of Exile 1, I deal 100 base damage and have two separate '10% more damage' multipliers and nothing else. What is my total damage? Just the number and one sentence why."
 expect = "contains-any"
 values = ["121"]
+parked = "LLM arithmetic is not a trusted path (law 2); re-point at a calc tool (#19)"
 
 [[questions]]
 id = "mechanics-less-stacking-math"

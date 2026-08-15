@@ -95,6 +95,7 @@ dependencies = [
  "exile-core",
  "exile-league",
  "exile-llm",
+ "exile-ninja",
  "exile-tool-api",
  "exile-wiki",
 ]
@@ -113,6 +114,7 @@ dependencies = [
  "exile-core",
  "exile-league",
  "exile-llm",
+ "exile-ninja",
  "exile-tool-api",
  "exile-wiki",
  "serde",
@@ -141,6 +143,17 @@ dependencies = [
  "serde_json",
  "toml",
  "ureq",
+]
+
+[[package]]
+name = "exile-ninja"
+version = "0.1.0"
+dependencies = [
+ "exile-league",
+ "exile-tool-api",
+ "exile-toolkit",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

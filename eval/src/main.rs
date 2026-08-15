@@ -38,8 +38,55 @@ struct QuestionFile {
 struct Question {
     id: String,
     prompt: String,
+    /// Optional orthogonal digit rule — substring matching alone cannot
+    /// express "and no invented number" (honesty guards) or "and an
+    /// actual figure" (price answers).
+    digits: Option<DigitRule>,
+    /// Set to a reason string to skip the question without deleting it:
+    /// the bank entry and its provenance stay, the runner reports SKIP,
+    /// and the gate is not held hostage by it. For probes that fail for
+    /// reasons outside the harness (e.g. LLM arithmetic, law 2).
+    parked: Option<String>,
     #[serde(flatten)]
     expect: Expect,
+}
+
+/// Whether the answer must or must not contain digits (game-name tokens
+/// like "Path of Exile 1" are exempt — see [`digits_ok`]).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum DigitRule {
+    /// At least one digit must appear (e.g. a price answer needs a figure,
+    /// so a polite refusal cannot false-pass).
+    Required,
+    /// No digits may appear (e.g. an honesty guard fails an answer that
+    /// hallucinates a number alongside the accepted decline phrases).
+    Forbidden,
+}
+
+/// Digit-rule check. Game and tool names legitimately contain digits
+/// ("Path of Exile 1", "`PoB2`"), so those tokens are stripped before
+/// scanning — they are echoes of the prompt, not invented figures.
+fn digits_ok(answer: &str, rule: DigitRule) -> bool {
+    let mut stripped = answer.to_lowercase();
+    for token in [
+        "path of exile 1",
+        "path of exile 2",
+        "poe1",
+        "poe2",
+        "poe 1",
+        "poe 2",
+        "path of building 2",
+        "pob2",
+        "pob 2",
+    ] {
+        stripped = stripped.replace(token, " ");
+    }
+    let has_digit = stripped.chars().any(|c| c.is_ascii_digit());
+    match rule {
+        DigitRule::Required => has_digit,
+        DigitRule::Forbidden => !has_digit,
+    }
 }
 
 /// How an answer is graded. Ground-truth kinds resolve their expected
@@ -178,6 +225,9 @@ fn ask(
     registry
         .register(Box::new(exile_wiki::WikiTool::new()))
         .expect("wiki tool name is unique");
+    registry
+        .register(Box::new(exile_ninja::PriceTool::new()))
+        .expect("price tool name is unique");
     let client = OpenAiClient::for_profile(profile)?;
     let mut session = Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned());
     if let Some(rounds) = max_tool_rounds {
@@ -274,6 +324,10 @@ fn main() -> ExitCode {
 
     let mut failures = 0u32;
     for question in selected {
+        if let Some(reason) = &question.parked {
+            println!("SKIP {} — parked: {reason}", question.id);
+            continue;
+        }
         let accepted = match resolve_expected(&question.expect, &ground_truth_tool) {
             Ok(accepted) => accepted,
             Err(err) => {
@@ -288,15 +342,24 @@ fn main() -> ExitCode {
                 println!("FAIL {} — {err}", question.id);
             }
             Ok(answer) => {
-                if answer_matches(&answer, &accepted) {
-                    println!("PASS {} (matched {accepted:?})", question.id);
-                } else {
+                if !answer_matches(&answer, &accepted) {
                     failures += 1;
                     println!(
                         "FAIL {} — expected {accepted:?}, got: {}",
                         question.id,
                         answer.trim()
                     );
+                } else if let Some(rule) = question.digits
+                    && !digits_ok(&answer, rule)
+                {
+                    failures += 1;
+                    println!(
+                        "FAIL {} — digits rule {rule:?} violated, got: {}",
+                        question.id,
+                        answer.trim()
+                    );
+                } else {
+                    println!("PASS {} (matched {accepted:?})", question.id);
                 }
             }
         }
@@ -401,5 +464,70 @@ mod tests {
         // Non-numeric values keep plain substring behavior.
         let text = Grading::Any(vec!["additive".to_owned()]);
         assert!(answer_matches("they stack additively", &text));
+    }
+
+    #[test]
+    fn digit_rules_ignore_game_name_tokens() {
+        // Forbidden: a clean decline passes even when it echoes names
+        // that contain digits.
+        assert!(digits_ok(
+            "I can't check your Path of Exile 1 character — no tool gives me access, \
+             and PoB2 isn't wired up yet.",
+            DigitRule::Forbidden
+        ));
+        // Forbidden: a hallucinated figure fails, even beside a decline.
+        assert!(!digits_ok(
+            "Your DPS is probably around 500k, but you'd need Path of Building for exact numbers.",
+            DigitRule::Forbidden
+        ));
+        // Required: a real figure passes, a priceless refusal fails.
+        assert!(digits_ok(
+            "Mageblood is 1715 divine on poe.ninja.",
+            DigitRule::Required
+        ));
+        assert!(!digits_ok(
+            "I couldn't reach poe.ninja to price Mageblood in Path of Exile 1 right now.",
+            DigitRule::Required
+        ));
+    }
+
+    #[test]
+    fn digit_rules_in_questions_file_parse() {
+        let file: QuestionFile = toml::from_str(QUESTIONS).expect("questions.toml parses");
+        let rule_of = |id: &str| {
+            file.questions
+                .iter()
+                .find(|question| question.id == id)
+                .unwrap_or_else(|| panic!("question {id} exists"))
+                .digits
+        };
+        assert!(matches!(
+            rule_of("price-mageblood-poe1"),
+            Some(DigitRule::Required)
+        ));
+        assert!(matches!(
+            rule_of("honest-about-missing-tools"),
+            Some(DigitRule::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn parked_questions_carry_a_reason() {
+        let file: QuestionFile = toml::from_str(QUESTIONS).expect("questions.toml parses");
+        for question in &file.questions {
+            if let Some(reason) = &question.parked {
+                assert!(
+                    !reason.trim().is_empty(),
+                    "parked question {} needs a reason",
+                    question.id
+                );
+            }
+        }
+        assert!(
+            file.questions
+                .iter()
+                .any(|question| question.parked.is_some()),
+            "the parked mechanism is exercised by the bank"
+        );
     }
 }
