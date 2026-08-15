@@ -214,6 +214,16 @@ mod tests {
     }
 
     #[test]
+    fn escaped_entities_stay_literal_not_double_decoded() {
+        // `&amp;#x2212;` in HTML source means the literal text "&#x2212;":
+        // the author escaped the ampersand so it must NOT decode further.
+        // A browser renders the reference itself, and so do we — which is
+        // why `&amp;` is decoded last, after the numeric pass.
+        assert_eq!(html_to_text("a &amp;#x2212; b"), "a &#x2212; b");
+        assert_eq!(html_to_text("a &amp;lt;b&amp;gt; c"), "a &lt;b&gt; c");
+    }
+
+    #[test]
     fn numeric_entities_decode() {
         assert_eq!(
             html_to_text("x &#91;1&#93; is &#x2212;5"),
