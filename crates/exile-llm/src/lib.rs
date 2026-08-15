@@ -16,6 +16,8 @@ mod config;
 
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use exile_core::{Message, ModelDriver, ModelError, ModelTurn, ToolCallRequest, ToolSpec};
 use serde_json::{Value, json};
@@ -54,11 +56,21 @@ pub struct UreqTransport {
 }
 
 impl UreqTransport {
-    /// Build the live transport.
+    /// Build the live transport without a request ceiling.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_ceiling(None)
+    }
+
+    /// Build the live transport with an optional wall-clock ceiling for
+    /// the whole request (connect + headers + body). Connecting always has
+    /// its own short timeout: a blackholed endpoint must fail fast rather
+    /// than hang before the idle watchdog can even engage.
+    #[must_use]
+    pub fn with_ceiling(request_timeout: Option<Duration>) -> Self {
         let agent_config = ureq::Agent::config_builder()
-            .timeout_global(None)
+            .timeout_global(request_timeout)
+            .timeout_connect(Some(Duration::from_secs(10)))
             .http_status_as_error(false)
             .user_agent(exile_toolkit::USER_AGENT)
             .build();
@@ -118,6 +130,7 @@ pub struct OpenAiClient {
     api_key: Option<String>,
     tool_mode: ToolMode,
     temperature: Option<f64>,
+    idle_timeout: Duration,
 }
 
 impl OpenAiClient {
@@ -127,13 +140,14 @@ impl OpenAiClient {
     pub fn for_profile(profile: &Profile) -> Result<Self, String> {
         let api_key = profile.api_key()?;
         let mut client = Self::with_transport(
-            Box::new(UreqTransport::new()),
+            Box::new(UreqTransport::with_ceiling(profile.request_timeout())),
             &profile.base_url,
             &profile.model,
             api_key,
             profile.tool_mode,
         );
         client.temperature = profile.temperature;
+        client.idle_timeout = profile.idle_timeout();
         Ok(client)
     }
 
@@ -153,6 +167,7 @@ impl OpenAiClient {
             api_key,
             tool_mode,
             temperature: None,
+            idle_timeout: config::DEFAULT_IDLE_TIMEOUT,
         }
     }
 
@@ -222,6 +237,11 @@ impl ModelDriver for OpenAiClient {
             .transport
             .post_json(&url, self.api_key.as_deref(), &body)
             .map_err(ModelError)?;
+        // Idle watchdog: an actively-streaming completion is never
+        // interrupted, but silence beyond the configured window fails the
+        // turn instead of hanging forever.
+        let reader: Box<dyn Read + Send> =
+            Box::new(IdleTimeoutReader::new(reader, self.idle_timeout));
 
         match self.tool_mode {
             ToolMode::Native => read_stream(reader, on_token),
@@ -311,6 +331,92 @@ fn build_messages(system_prompt: &str, transcript: &[Message], prompted: bool) -
         });
     }
     messages
+}
+
+/// Wraps a blocking reader with an idle watchdog: a pump thread forwards
+/// chunks over a channel and the consumer fails with `TimedOut` when no
+/// data arrives within the window. Active streaming is never interrupted —
+/// only silence is. The pump thread may linger parked on a dead read until
+/// the connection drops; that is the accepted cost of a true idle timeout
+/// over blocking I/O.
+struct IdleTimeoutReader {
+    receiver: mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    idle: Duration,
+    buffer: Vec<u8>,
+    offset: usize,
+    done: bool,
+}
+
+impl IdleTimeoutReader {
+    fn new(mut inner: Box<dyn Read + Send>, idle: Duration) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match inner.read(&mut chunk) {
+                    Ok(0) => {
+                        // EOF marker: an empty chunk.
+                        let _ = sender.send(Ok(Vec::new()));
+                        break;
+                    }
+                    Ok(count) => {
+                        if sender.send(Ok(chunk[..count].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = sender.send(Err(err));
+                        break;
+                    }
+                }
+            }
+        });
+        Self {
+            receiver,
+            idle,
+            buffer: Vec::new(),
+            offset: 0,
+            done: false,
+        }
+    }
+}
+
+impl Read for IdleTimeoutReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.offset >= self.buffer.len() {
+            if self.done {
+                return Ok(0);
+            }
+            match self.receiver.recv_timeout(self.idle) {
+                Ok(Ok(chunk)) if chunk.is_empty() => {
+                    self.done = true;
+                    return Ok(0);
+                }
+                Ok(Ok(chunk)) => {
+                    self.buffer = chunk;
+                    self.offset = 0;
+                }
+                Ok(Err(err)) => {
+                    self.done = true;
+                    return Err(err);
+                }
+                Err(_) => {
+                    self.done = true;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "no data received for {}s (idle timeout; the endpoint may be stalled)",
+                            self.idle.as_secs()
+                        ),
+                    ));
+                }
+            }
+        }
+        let count = (self.buffer.len() - self.offset).min(buf.len());
+        buf[..count].copy_from_slice(&self.buffer[self.offset..self.offset + count]);
+        self.offset += count;
+        Ok(count)
+    }
 }
 
 /// Accumulates one streamed tool call across SSE fragments.
@@ -935,6 +1041,46 @@ data: [DONE]\n";
 
         let unterminated = "<think>never closed";
         assert!(extract_prompted_tool_call(unterminated).is_none());
+    }
+
+    #[test]
+    fn idle_timeout_fires_on_silence_but_not_on_slow_streams() {
+        use std::io::Read as _;
+
+        /// Yields one chunk, then blocks forever.
+        struct StallAfterFirst {
+            served: bool,
+        }
+        impl Read for StallAfterFirst {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.served {
+                    std::thread::park();
+                    unreachable!("parked forever");
+                }
+                self.served = true;
+                buf[0] = b'x';
+                Ok(1)
+            }
+        }
+
+        let mut reader = IdleTimeoutReader::new(
+            Box::new(StallAfterFirst { served: false }),
+            Duration::from_millis(50),
+        );
+        let mut buf = [0u8; 8];
+        assert_eq!(reader.read(&mut buf).expect("first chunk arrives"), 1);
+        let err = reader.read(&mut buf).expect_err("silence must time out");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(err.to_string().contains("idle timeout"));
+
+        // A normal finite stream passes through untouched.
+        let mut ok_reader = IdleTimeoutReader::new(
+            Box::new(std::io::Cursor::new(b"hello".to_vec())),
+            Duration::from_millis(50),
+        );
+        let mut out = String::new();
+        ok_reader.read_to_string(&mut out).expect("reads to end");
+        assert_eq!(out, "hello");
     }
 
     #[test]

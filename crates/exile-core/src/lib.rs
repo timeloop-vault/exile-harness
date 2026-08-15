@@ -17,9 +17,10 @@
 use exile_tool_api::ToolRegistry;
 use std::fmt;
 
-/// Upper bound on model→tools→model rounds within one turn, so a model
-/// that keeps requesting tools cannot loop forever.
-const MAX_TOOL_ROUNDS: usize = 8;
+/// Default upper bound on model→tools→model rounds within one turn, so a
+/// model that keeps requesting tools cannot loop forever. Configurable per
+/// session via [`Session::set_max_tool_rounds`].
+const DEFAULT_MAX_TOOL_ROUNDS: usize = 8;
 
 /// What the harness emits while processing a turn. Frontends render these;
 /// nothing else crosses the core/frontend boundary.
@@ -170,6 +171,7 @@ pub struct Session {
     model: Option<Box<dyn ModelDriver>>,
     system_prompt: String,
     manual_calls: u64,
+    max_tool_rounds: usize,
 }
 
 impl Session {
@@ -182,6 +184,7 @@ impl Session {
             model: None,
             system_prompt: String::new(),
             manual_calls: 0,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
         }
     }
 
@@ -198,7 +201,13 @@ impl Session {
             model: Some(model),
             system_prompt,
             manual_calls: 0,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
         }
+    }
+
+    /// Set the per-turn tool-round limit (clamped to at least 1).
+    pub fn set_max_tool_rounds(&mut self, rounds: usize) {
+        self.max_tool_rounds = rounds.max(1);
     }
 
     /// The tools this session can use.
@@ -295,11 +304,12 @@ impl Session {
                 }
                 return;
             }
-            if round == MAX_TOOL_ROUNDS {
+            if round == self.max_tool_rounds {
                 // Do not execute calls the model can never see answered.
                 sink(&Event::TurnFailed {
                     error: format!(
-                        "model exceeded the limit of {MAX_TOOL_ROUNDS} tool rounds in one turn"
+                        "model exceeded the limit of {} tool rounds in one turn",
+                        self.max_tool_rounds
                     ),
                 });
                 return;
@@ -653,6 +663,30 @@ mod tests {
         assert!(matches!(
             events.last(),
             Some(Event::TurnFailed { error }) if error.contains("limit")
+        ));
+    }
+
+    #[test]
+    fn tool_round_limit_is_configurable() {
+        let model = ScriptedModel::new(vec![
+            Ok(tool_turn("call-1", "upper", "{}")),
+            Ok(tool_turn("call-2", "upper", "{}")),
+            Ok(text_turn("never reached")),
+        ]);
+        let mut session =
+            Session::with_model(upper_registry(), Box::new(model), "system".to_owned());
+        session.set_max_tool_rounds(1);
+        let events = collect_events(|sink| session.submit("go", sink));
+
+        // Round 1 executes; the second tool request hits the limit.
+        let executed = events
+            .iter()
+            .filter(|event| matches!(event, Event::ToolCallFinished { .. }))
+            .count();
+        assert_eq!(executed, 1);
+        assert!(matches!(
+            events.last(),
+            Some(Event::TurnFailed { error }) if error.contains("limit of 1")
         ));
     }
 
