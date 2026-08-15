@@ -1,3 +1,6 @@
 /target
 .env
 exile.toml
+# Stock engine checkouts and runtimes for the PoB bridge (issue #19) —
+# vendored locally, never committed; see spikes/pob-headless/README.md.
+/vendor/pob/
