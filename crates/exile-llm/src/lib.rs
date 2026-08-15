@@ -1047,15 +1047,19 @@ data: [DONE]\n";
     fn idle_timeout_fires_on_silence_but_not_on_slow_streams() {
         use std::io::Read as _;
 
-        /// Yields one chunk, then blocks forever.
-        struct StallAfterFirst {
+        /// Yields one chunk, then blocks until the test releases it (so
+        /// the pump thread can exit instead of leaking parked).
+        struct StallUntilReleased {
             served: bool,
+            release: mpsc::Receiver<()>,
         }
-        impl Read for StallAfterFirst {
+        impl Read for StallUntilReleased {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
                 if self.served {
-                    std::thread::park();
-                    unreachable!("parked forever");
+                    // Blocks during the assertion window; returns EOF once
+                    // the test drops the sender, letting the thread exit.
+                    let _ = self.release.recv();
+                    return Ok(0);
                 }
                 self.served = true;
                 buf[0] = b'x';
@@ -1063,8 +1067,12 @@ data: [DONE]\n";
             }
         }
 
+        let (release_sender, release_receiver) = mpsc::channel::<()>();
         let mut reader = IdleTimeoutReader::new(
-            Box::new(StallAfterFirst { served: false }),
+            Box::new(StallUntilReleased {
+                served: false,
+                release: release_receiver,
+            }),
             Duration::from_millis(50),
         );
         let mut buf = [0u8; 8];
@@ -1072,6 +1080,7 @@ data: [DONE]\n";
         let err = reader.read(&mut buf).expect_err("silence must time out");
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
         assert!(err.to_string().contains("idle timeout"));
+        drop(release_sender); // unblock the pump thread so it exits
 
         // A normal finite stream passes through untouched.
         let mut ok_reader = IdleTimeoutReader::new(
