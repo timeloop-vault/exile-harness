@@ -2,8 +2,9 @@
 
 **Outcome: proven.** A stock, unmodified checkout of each engine runs
 headless on Windows under a standalone LuaJIT, driven by one shared
-JSON-lines stdio adapter (`adapter.lua`, ~230 lines, our code). Verified
-2026-08-15:
+JSON-lines stdio adapter (`adapter.lua`, ~230 lines, our code). The
+table records observations as of 2026-08-15 with that provenance stamp
+(the sanctioned Tier-B pattern) — spike evidence, not answer-path facts:
 
 | | poe1 (PathOfBuilding) | poe2 (PathOfBuilding-PoE2) |
 |---|---|---|
@@ -12,7 +13,9 @@ JSON-lines stdio adapter (`adapter.lua`, ~230 lines, our code). Verified
 | Round trip | `loadXML → makeCode → loadCode → stats` | same, zero per-engine code |
 
 Run it: `.\demo.ps1 -Game poe1 -BuildXml ..\..\vendor\pob\poe1\spec\TestBuilds\3.13\OccVortex.xml`
-and `.\demo.ps1 -Game poe2`.
+and `.\demo.ps1 -Game poe2` (any XML under the engine's own
+`spec/TestBuilds/` works; poe2 ships none, so its demo uses an
+engine-generated build).
 
 ## Setup
 
@@ -21,8 +24,8 @@ git clone https://github.com/PathOfBuildingCommunity/PathOfBuilding.git      ven
 git clone https://github.com/PathOfBuildingCommunity/PathOfBuilding-PoE2.git vendor/pob/poe2
 ```
 
-Checkouts are gitignored (`/vendor/`) and stay stock — never forked,
-never patched (sanctioned-exception rule in CLAUDE.md).
+Checkouts are gitignored (`/vendor/pob/`) and stay stock — never
+forked, never patched (sanctioned-exception rule in CLAUDE.md).
 
 LuaJIT 2.1, standalone (the checkouts ship the GUI runtime but no
 standalone `luajit.exe`):
@@ -60,13 +63,16 @@ PathOfBuilding#9505, maxrenke/pob2-mcp).
   `build`, `newBuild()`, `loadBuildFromXML(xml, name)`.
 - Stats: `build.calcsTab:BuildOutput()` (when present), then read scalar
   fields off `build.calcsTab.mainOutput`. One `OnFrame` per mutation or
-  the numbers are stale.
+  the numbers are stale — the wrapper's load helpers pump it internally
+  (which is why this adapter needs no explicit frame stepping), but any
+  future mutation command (items, tree, config) must call
+  `runCallback("OnFrame")` itself before reading.
 
 Protocol (one JSON object per line, engine noise on stderr, responses
 on stdout after a `{"ready":true,...}` banner):
 
 ```
-{"id":1,"cmd":"version"}                     → {"id":1,"ok":true,"result":{"engine":"2.67.2"}}
+{"id":1,"cmd":"version"}                     → {"id":1,"ok":true,"result":{"engine":"<engine version>"}}
 {"id":2,"cmd":"loadXML","xml":"<PathOf..."}  → load a build from XML
 {"id":3,"cmd":"loadCode","code":"eNqt..."}   → import a base64url build code
 {"id":4,"cmd":"makeCode"}                    → export the current build as a code

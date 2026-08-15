@@ -17,6 +17,8 @@
 --            {"id":6,"cmd":"stats","keys":["Life","TotalDPS"]}
 --            {"id":7,"cmd":"quit"}
 -- Responses: {"id":N,"ok":true,"result":...} | {"id":N,"ok":false,"error":"..."}
+-- Request ids must be >= 1; a line that fails to parse as JSON is
+-- answered with id 0 (unattributable) plus the parser's error detail.
 --
 -- Both engines stub the SimpleGraphic host functions Inflate/Deflate to
 -- return "" in headless mode, which silently breaks build-code
@@ -174,13 +176,15 @@ function handlers.makeCode()
 end
 
 function handlers.stats(params)
+    assert(params.keys == nil or type(params.keys) == "table",
+        "`keys` must be an array of stat names")
     if build.calcsTab.BuildOutput then
         build.calcsTab:BuildOutput()
     end
     local out = build.calcsTab.mainOutput or {}
     local result = {}
     for _, key in ipairs(params.keys or DEFAULT_STATS) do
-        local value = out[key]
+        local value = type(key) == "string" and out[key] or nil
         if type(value) == "number" then
             result[key] = sanitize(value)
         elseif type(value) == "string" or type(value) == "boolean" then
@@ -200,9 +204,13 @@ respond({ ready = true, engine = tostring(launch and launch.versionNumber or "un
 for line in io.stdin:lines() do
     line = line:gsub("\r$", "") -- tolerate CRLF hosts
     if line ~= "" then
-        local request = json.decode(line)
+        local request, _, decode_error = json.decode(line)
         if type(request) ~= "table" then
-            respond({ ok = false, error = "unparseable request line" })
+            respond({
+                id = 0,
+                ok = false,
+                error = "unparseable request line: " .. tostring(decode_error or "not a JSON object"),
+            })
         elseif request.cmd == "quit" then
             respond({ id = request.id, ok = true, result = { bye = true } })
             break
