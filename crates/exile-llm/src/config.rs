@@ -34,6 +34,10 @@ pub struct Profile {
     /// How tool definitions reach the model.
     #[serde(default)]
     pub tool_mode: ToolMode,
+    /// Sampling temperature; omit for the server default. The eval forces
+    /// 0 for reproducibility unless a profile sets one explicitly.
+    #[serde(default)]
+    pub temperature: Option<f64>,
 }
 
 /// How tool definitions reach the model.
@@ -60,6 +64,15 @@ impl Config {
                 "default_profile `{}` is not defined in [profiles]",
                 config.default_profile
             ));
+        }
+        for (name, profile) in &config.profiles {
+            if let Some(temperature) = profile.temperature
+                && !(temperature.is_finite() && (0.0..=2.0).contains(&temperature))
+            {
+                return Err(format!(
+                    "profile `{name}`: temperature must be a finite number between 0 and 2"
+                ));
+            }
         }
         Ok(config)
     }

@@ -117,6 +117,7 @@ pub struct OpenAiClient {
     model: String,
     api_key: Option<String>,
     tool_mode: ToolMode,
+    temperature: Option<f64>,
 }
 
 impl OpenAiClient {
@@ -125,13 +126,15 @@ impl OpenAiClient {
     /// must never silently degrade to an unauthenticated request.
     pub fn for_profile(profile: &Profile) -> Result<Self, String> {
         let api_key = profile.api_key()?;
-        Ok(Self::with_transport(
+        let mut client = Self::with_transport(
             Box::new(UreqTransport::new()),
             &profile.base_url,
             &profile.model,
             api_key,
             profile.tool_mode,
-        ))
+        );
+        client.temperature = profile.temperature;
+        Ok(client)
     }
 
     /// Client with an injected transport (tests).
@@ -149,6 +152,7 @@ impl OpenAiClient {
             model: model.to_owned(),
             api_key,
             tool_mode,
+            temperature: None,
         }
     }
 
@@ -164,7 +168,7 @@ impl OpenAiClient {
         transcript: &[Message],
         tools: &[ToolSpec],
     ) -> Value {
-        match self.tool_mode {
+        let mut body = match self.tool_mode {
             ToolMode::Native => {
                 let mut body = json!({
                     "model": self.model,
@@ -194,7 +198,11 @@ impl OpenAiClient {
                     "messages": build_messages(&prompt, transcript, true),
                 })
             }
+        };
+        if let Some(temperature) = self.temperature {
+            body["temperature"] = json!(temperature);
         }
+        body
     }
 }
 

@@ -10,6 +10,7 @@ default_profile = "local-ollama"
 base_url = "http://<ollama-host>:11434/v1"
 model = "<model-name>"        # e.g. a large qwen for native tool calling
 tool_mode = "native"
+# temperature = 0.0           # optional; omit for the server default
 
 [profiles.local-vllm]
 base_url = "http://<vllm-host>:8000/v1"
