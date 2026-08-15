@@ -184,6 +184,9 @@ const ITEM_ENDPOINT: &str = "stash/current/item/overview";
 /// matched case-insensitively because models lowercase arguments).
 const EXCHANGE_CATEGORIES: [&str; 3] = ["Currency", "Fragment", "Fragments"];
 
+/// The `http status: NNN` form is a contract pinned by `exile-toolkit`
+/// (`describe_get_error` and its test), not an accident of the HTTP
+/// client's error formatting.
 fn is_not_found(err: &ToolError) -> bool {
     matches!(err, ToolError::Failed(msg) if msg.contains("http status: 404"))
 }
@@ -236,7 +239,8 @@ fn trim_line(line: &Value, catalog: &HashMap<&str, &str>) -> Value {
         }
     }
     if let Some(currency) = line["maxVolumeCurrency"].as_str() {
-        out.insert("max_volume_currency".to_owned(), json!(currency));
+        let display = catalog.get(currency).copied().unwrap_or(currency);
+        out.insert("max_volume_currency".to_owned(), json!(display));
         if let Some(rate) = line["maxVolumeRate"].as_f64() {
             out.insert("max_volume_rate".to_owned(), json!(rate));
         }
@@ -361,7 +365,7 @@ mod tests {
         assert_eq!(prices["lines"][1]["id"], "chaos");
         assert_eq!(prices["lines"][1]["name"], "Chaos Orb");
         assert_eq!(prices["lines"][1]["value"], 1.0);
-        assert_eq!(prices["lines"][1]["max_volume_currency"], "divine");
+        assert_eq!(prices["lines"][1]["max_volume_currency"], "Divine Orb");
         assert_eq!(prices["lines"][1]["change_percent"], 9.54);
     }
 

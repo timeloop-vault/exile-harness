@@ -107,11 +107,23 @@ impl HttpGet for UreqHttp {
             .agent
             .get(url)
             .call()
-            .map_err(|err| format!("GET {url} failed: {err}"))?;
+            .map_err(|err| describe_get_error(url, &err))?;
         response
             .body_mut()
             .read_to_string()
             .map_err(|err| format!("reading body of {url} failed: {err}"))
+    }
+}
+
+/// Render a request error, normalizing HTTP status failures to the
+/// stable `http status: NNN` form. Downstream code matches on that
+/// substring (e.g. the price tool's 404 endpoint fallback), so the
+/// format is a contract pinned here and by test — not an accident of
+/// ureq's error `Display`.
+fn describe_get_error(url: &str, err: &ureq::Error) -> String {
+    match err {
+        ureq::Error::StatusCode(code) => format!("GET {url} failed: http status: {code}"),
+        other => format!("GET {url} failed: {other}"),
     }
 }
 
@@ -142,8 +154,14 @@ impl CachedHttp {
 
 impl HttpGet for CachedHttp {
     fn get(&self, url: &str) -> Result<String, String> {
+        // Poisoning is recovered, not propagated: the map only ever holds
+        // complete (Instant, body) pairs, so the worst a panicking peer
+        // leaves behind is a valid cache we can keep using.
         {
-            let entries = self.entries.lock().expect("cache lock");
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some((stored_at, body)) = entries.get(url)
                 && stored_at.elapsed() < self.ttl
             {
@@ -151,7 +169,10 @@ impl HttpGet for CachedHttp {
             }
         }
         let body = self.inner.get(url)?;
-        let mut entries = self.entries.lock().expect("cache lock");
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         entries.retain(|_, (stored_at, _)| stored_at.elapsed() < self.ttl);
         entries.insert(url.to_owned(), (std::time::Instant::now(), body.clone()));
         Ok(body)
@@ -223,6 +244,16 @@ mod tests {
     #[test]
     fn fail_http_always_fails() {
         assert!(FailHttp.get("https://example.com").is_err());
+    }
+
+    #[test]
+    fn status_errors_have_a_stable_format() {
+        // Contract test: the price tool's 404 endpoint fallback matches
+        // this exact substring.
+        assert_eq!(
+            super::describe_get_error("https://x/y", &ureq::Error::StatusCode(404)),
+            "GET https://x/y failed: http status: 404"
+        );
     }
 
     #[test]
