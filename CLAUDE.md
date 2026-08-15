@@ -12,8 +12,11 @@ consumers of it. CLI binary name: `exile`.
    the predecessor projects twice (once as LoRA weights, once as prompt
    text in poe-agents).
 2. **The model never computes game math.** Build numbers come from the Path
-   of Building engine (stock checkout, driven headless). The LLM only
-   synthesizes.
+   of Building engine (stock checkout, driven headless), and other game
+   arithmetic (modifier stacking, damage formulas) belongs in calculation
+   tools as they land — LLM arithmetic is never a trusted answer path. The
+   LLM only synthesizes. Until calc tools exist, math-flavored eval
+   questions are interim probes of rule knowledge, not the destination.
 3. **PoE 1 and PoE 2 are first-class.** Every tool takes a `game` parameter
    (`poe1` | `poe2`); corpora stay separated to avoid cross-game
    contamination.

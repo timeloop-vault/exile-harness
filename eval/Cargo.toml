@@ -14,6 +14,7 @@ path = "src/main.rs"
 exile-core.workspace = true
 exile-league.workspace = true
 exile-llm.workspace = true
+exile-wiki.workspace = true
 exile-tool-api.workspace = true
 serde.workspace = true
 serde_json.workspace = true

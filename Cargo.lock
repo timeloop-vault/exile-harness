@@ -114,6 +114,7 @@ dependencies = [
  "exile-league",
  "exile-llm",
  "exile-tool-api",
+ "exile-wiki",
  "serde",
  "serde_json",
  "toml",

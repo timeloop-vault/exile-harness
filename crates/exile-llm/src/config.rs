@@ -34,6 +34,10 @@ pub struct Profile {
     /// How tool definitions reach the model.
     #[serde(default)]
     pub tool_mode: ToolMode,
+    /// Sampling temperature; omit for the server default. The eval forces
+    /// 0 for reproducibility unless a profile sets one explicitly.
+    #[serde(default)]
+    pub temperature: Option<f64>,
 }
 
 /// How tool definitions reach the model.

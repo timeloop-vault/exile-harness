@@ -35,3 +35,86 @@ id = "honest-about-missing-tools"
 prompt = "What does Mageblood cost right now in Path of Exile 1? Answer briefly."
 expect = "contains-any"
 values = ["can't", "cannot", "unable", "no tool", "don't have", "do not have", "not available", "lack"]
+
+# ── Mechanics bank ──────────────────────────────────────────────────────
+#
+# Expected values below are stable Path of Exile 1 mechanics facts,
+# ported from a verified, wiki-sourced Q&A set built during an earlier
+# experiment — these are exactly the facts models get wrong from memory
+# (they were the observed fine-tuning failures). The harness must answer
+# them via the wiki tool. Stable across leagues; re-verify only on major
+# mechanics reworks.
+#
+# NOTE (project law 2): the *-math questions are INTERIM probes — they
+# test that the model states combination rules correctly, but LLM
+# arithmetic is not a trusted answer path. Once a calculation tool lands
+# (PoB bridge or a modifier-calc tool), re-point these questions to grade
+# tool usage instead of model arithmetic.
+
+[[questions]]
+id = "mechanics-max-res-default"
+prompt = "In Path of Exile 1, what is the default maximum elemental resistance percentage? One sentence."
+expect = "contains-any"
+values = ["75"]
+
+[[questions]]
+id = "mechanics-max-res-hard-cap"
+prompt = "In Path of Exile 1, maximum resistance can be raised above the default — but is there a hard upper limit, and what is it? One sentence."
+expect = "contains-any"
+values = ["90"]
+
+[[questions]]
+id = "mechanics-campaign-res-penalty"
+prompt = "In Path of Exile 1, describe the resistance penalties applied during the campaign: how much, and at which points? Keep it short."
+expect = "contains-all"
+values = ["30", "60"]
+
+# Named "Kitava" deliberately: the vaguer phrasing "campaign resistance
+# penalty" sent the model into long multi-round search spirals.
+[[questions]]
+id = "mechanics-penalty-includes-chaos"
+prompt = "In Path of Exile 1, does the Kitava resistance penalty also apply to chaos resistance? One sentence."
+expect = "contains-any"
+values = ["yes", "including chaos", "all resist", "chaos too", "also lower", "does affect", "it does"]
+
+[[questions]]
+id = "mechanics-res-damage-taken"
+prompt = "In Path of Exile 1, with exactly 75% fire resistance, what fraction of incoming fire damage do you still take? One sentence."
+expect = "contains-any"
+values = ["25", "quarter", "1/4"]
+
+[[questions]]
+id = "mechanics-negative-res-floor"
+prompt = "In Path of Exile 1, resistances can go negative — how low can they go before hitting the floor? One sentence."
+expect = "contains-any"
+values = ["200"]
+
+[[questions]]
+id = "mechanics-increased-vs-more-stacking"
+prompt = "In Path of Exile 1, do multiple 'increased damage' modifiers stack additively or multiplicatively with each other? And multiple 'more damage' multipliers? One short sentence for each."
+expect = "contains-all"
+values = ["additive", "multiplicative"]
+
+[[questions]]
+id = "mechanics-two-increased-math"
+prompt = "In Path of Exile 1, I deal 100 base damage and have two separate '10% increased damage' modifiers and nothing else. What is my total damage? Just the number and one sentence why."
+expect = "contains-any"
+values = ["120"]
+
+[[questions]]
+id = "mechanics-two-more-math"
+prompt = "In Path of Exile 1, I deal 100 base damage and have two separate '10% more damage' multipliers and nothing else. What is my total damage? Just the number and one sentence why."
+expect = "contains-any"
+values = ["121"]
+
+[[questions]]
+id = "mechanics-less-stacking-math"
+prompt = "In Path of Exile 1, I have one '20% less damage' modifier and one '10% less damage' modifier. What is the total damage reduction? Just the number and one sentence why."
+expect = "contains-any"
+values = ["28"]
+
+[[questions]]
+id = "mechanics-rare-item-mod-count"
+prompt = "In Path of Exile 1, how many explicit modifiers can a standard rare item have at most? One sentence."
+expect = "contains-any"
+values = ["6", "six"]

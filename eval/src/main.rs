@@ -62,6 +62,20 @@ enum Expect {
         /// Accepted substrings.
         values: Vec<String>,
     },
+    /// Answer must contain every one of these (case-insensitive).
+    ContainsAll {
+        /// Required substrings.
+        values: Vec<String>,
+    },
+}
+
+/// A resolved grading rule for one question.
+#[derive(Debug)]
+enum Grading {
+    /// At least one value must appear.
+    Any(Vec<String>),
+    /// Every value must appear.
+    All(Vec<String>),
 }
 
 /// The current softcore, non-SSF, non-Ruthless challenge league id from a
@@ -90,26 +104,32 @@ fn latest_past_league(result: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Case-insensitive containment check for any accepted value.
-fn answer_matches(answer: &str, accepted: &[String]) -> bool {
+/// Case-insensitive containment check against the grading rule.
+fn answer_matches(answer: &str, grading: &Grading) -> bool {
     let answer = answer.to_lowercase();
-    accepted
-        .iter()
-        .any(|value| answer.contains(&value.to_lowercase()))
+    match grading {
+        Grading::Any(values) => values
+            .iter()
+            .any(|value| answer.contains(&value.to_lowercase())),
+        Grading::All(values) => values
+            .iter()
+            .all(|value| answer.contains(&value.to_lowercase())),
+    }
 }
 
-/// Resolve the accepted substrings for a question, calling the league tool
-/// for ground-truth kinds.
-fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Vec<String>, String> {
+/// Resolve a question's grading rule, calling the league tool for
+/// ground-truth kinds.
+fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Grading, String> {
     match expect {
-        Expect::ContainsAny { values } => Ok(values.clone()),
+        Expect::ContainsAny { values } => Ok(Grading::Any(values.clone())),
+        Expect::ContainsAll { values } => Ok(Grading::All(values.clone())),
         Expect::ChallengeLeagueId { game } => {
             let result = league
                 .execute(&format!(r#"{{"game":"{game}"}}"#))
                 .map_err(|err| format!("ground-truth league call failed: {err}"))?;
             let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
             challenge_league_id(&result)
-                .map(|id| vec![id])
+                .map(|id| Grading::Any(vec![id]))
                 .ok_or_else(|| "no challenge league in tool result".to_owned())
         }
         Expect::LatestPastLeague { game } => {
@@ -118,7 +138,7 @@ fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Vec<String>, S
                 .map_err(|err| format!("ground-truth league call failed: {err}"))?;
             let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
             latest_past_league(&result)
-                .map(|name| vec![name])
+                .map(|name| Grading::Any(vec![name]))
                 .ok_or_else(|| "no past leagues in tool result".to_owned())
         }
     }
@@ -127,10 +147,14 @@ fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Vec<String>, S
 /// Run one question through a fresh session; returns the assistant's full
 /// text, or an error description if the turn failed.
 fn ask(profile: &exile_llm::Profile, question: &str) -> Result<String, String> {
+    // Mirror the CLI's tool registry so the eval grades the real thing.
     let mut registry = ToolRegistry::new();
     registry
         .register(Box::new(exile_league::LeagueTool::new()))
         .expect("league tool registers into an empty registry");
+    registry
+        .register(Box::new(exile_wiki::WikiTool::new()))
+        .expect("wiki tool name is unique");
     let client = OpenAiClient::for_profile(profile)?;
     let mut session = Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned());
 
@@ -148,26 +172,30 @@ fn ask(profile: &exile_llm::Profile, question: &str) -> Result<String, String> {
     }
 }
 
-fn parse_args(args: impl Iterator<Item = String>) -> Result<(String, Option<String>), String> {
+fn parse_args(
+    args: impl Iterator<Item = String>,
+) -> Result<(String, Option<String>, Option<String>), String> {
     let mut config_path = "exile.toml".to_owned();
     let mut profile = None;
+    let mut only = None;
     let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--config" => config_path = args.next().ok_or("--config requires a path")?,
             "--profile" => profile = Some(args.next().ok_or("--profile requires a name")?),
+            "--only" => only = Some(args.next().ok_or("--only requires an id substring")?),
             other => {
                 return Err(format!(
-                    "unknown argument `{other}` (usage: exile-eval [--config <path>] [--profile <name>])"
+                    "unknown argument `{other}` (usage: exile-eval [--config <path>] [--profile <name>] [--only <id-substring>])"
                 ));
             }
         }
     }
-    Ok((config_path, profile))
+    Ok((config_path, profile, only))
 }
 
 fn main() -> ExitCode {
-    let (config_path, profile_name) = match parse_args(std::env::args().skip(1)) {
+    let (config_path, profile_name, only) = match parse_args(std::env::args().skip(1)) {
         Ok(parsed) => parsed,
         Err(err) => {
             eprintln!("{err}");
@@ -188,17 +216,32 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Reproducibility: grade at temperature 0 unless the profile pins one.
+    let mut profile = profile.clone();
+    if profile.temperature.is_none() {
+        profile.temperature = Some(0.0);
+    }
+    let profile = &profile;
     let file: QuestionFile = toml::from_str(QUESTIONS).expect("questions.toml is pinned by tests");
     let ground_truth_tool = exile_league::LeagueTool::new();
 
+    let selected: Vec<&Question> = file
+        .questions
+        .iter()
+        .filter(|question| {
+            only.as_deref()
+                .is_none_or(|fragment| question.id.contains(fragment))
+        })
+        .collect();
     println!(
-        "exile-eval: {} questions via profile {profile_name} ({})",
+        "exile-eval: {} of {} questions via profile {profile_name} ({})",
+        selected.len(),
         file.questions.len(),
         profile.model
     );
 
     let mut failures = 0u32;
-    for question in &file.questions {
+    for question in selected {
         let accepted = match resolve_expected(&question.expect, &ground_truth_tool) {
             Ok(accepted) => accepted,
             Err(err) => {
@@ -214,13 +257,12 @@ fn main() -> ExitCode {
             }
             Ok(answer) => {
                 if answer_matches(&answer, &accepted) {
-                    println!("PASS {} (matched {:?})", question.id, accepted);
+                    println!("PASS {} (matched {accepted:?})", question.id);
                 } else {
                     failures += 1;
                     println!(
-                        "FAIL {} — expected one of {:?}, got: {}",
+                        "FAIL {} — expected {accepted:?}, got: {}",
                         question.id,
-                        accepted,
                         answer.trim()
                     );
                 }
@@ -229,10 +271,10 @@ fn main() -> ExitCode {
     }
 
     if failures == 0 {
-        println!("all {} questions passed", file.questions.len());
+        println!("all selected questions passed");
         ExitCode::SUCCESS
     } else {
-        println!("{failures} of {} questions failed", file.questions.len());
+        println!("{failures} selected questions failed");
         ExitCode::FAILURE
     }
 }
@@ -294,8 +336,18 @@ mod tests {
     fn answer_matching_is_case_insensitive() {
         assert!(answer_matches(
             "The current league is EXAMPLE LEAGUE.",
-            &["Example League".to_owned()]
+            &Grading::Any(vec!["Example League".to_owned()])
         ));
-        assert!(!answer_matches("no match here", &["Example".to_owned()]));
+        assert!(!answer_matches(
+            "no match here",
+            &Grading::Any(vec!["Example".to_owned()])
+        ));
+    }
+
+    #[test]
+    fn contains_all_requires_every_value() {
+        let grading = Grading::All(vec!["30".to_owned(), "60".to_owned()]);
+        assert!(answer_matches("-30% twice for -60% total", &grading));
+        assert!(!answer_matches("-30% once", &grading));
     }
 }
