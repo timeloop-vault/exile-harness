@@ -1,0 +1,23 @@
+[package]
+name = "exile-eval"
+description = "Live regression eval: runs seed questions through the full harness and grades answers against tool-resolved ground truth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "exile-eval"
+path = "src/main.rs"
+
+[dependencies]
+exile-core.workspace = true
+exile-league.workspace = true
+exile-llm.workspace = true
+exile-tool-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

@@ -106,6 +106,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "exile-eval"
+version = "0.1.0"
+dependencies = [
+ "exile-core",
+ "exile-league",
+ "exile-llm",
+ "exile-tool-api",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "exile-league"
 version = "0.1.0"
 dependencies = [

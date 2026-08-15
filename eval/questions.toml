@@ -1,0 +1,37 @@
+# Seed regression questions — the facts a model answers wrong from memory.
+#
+# Assertions never hardcode game facts (project law #1 applies to the eval
+# too): ground truth is resolved live from the league tool at eval time,
+# so these questions stay valid across league flips without edits.
+
+[[questions]]
+id = "current-league-poe1"
+prompt = "What is the current challenge league in Path of Exile 1? Answer in one sentence."
+expect = "challenge-league-id"
+game = "poe1"
+
+[[questions]]
+id = "current-league-poe2"
+prompt = "What is the current challenge league in Path of Exile 2? Answer in one sentence."
+expect = "challenge-league-id"
+game = "poe2"
+
+[[questions]]
+id = "latest-past-league-poe1"
+prompt = "Which Path of Exile 1 challenge league ended most recently? Answer in one sentence."
+expect = "latest-past-league"
+game = "poe1"
+
+[[questions]]
+id = "purpose"
+prompt = "What are you, and what is your purpose? One short paragraph."
+expect = "contains-any"
+values = ["path of exile"]
+
+# Anti-hallucination guard: there is no price tool yet, so a grounded
+# agent must decline instead of inventing a number.
+[[questions]]
+id = "honest-about-missing-tools"
+prompt = "What does Mageblood cost right now in Path of Exile 1? Answer briefly."
+expect = "contains-any"
+values = ["can't", "cannot", "unable", "no tool", "don't have", "do not have", "not available", "lack"]

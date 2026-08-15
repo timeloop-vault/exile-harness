@@ -44,7 +44,10 @@ crates/
 prompts/           agent + protocol prompts as Markdown, embedded at
                    build time via include_str! — prompts are content,
                    never inline strings in Rust
-eval/              regression questions + runner         (from milestone 6)
+eval/              live regression eval: cargo run -p exile-eval — needs
+                   a model config + network, deliberately not in cargo
+                   test; assertions resolve ground truth from tools at
+                   eval time (law #1 applies to the eval too)
 ```
 
 - Dependency direction flows inward only: frontends depend on core, tools
