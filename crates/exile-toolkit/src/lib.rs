@@ -115,6 +115,49 @@ impl HttpGet for UreqHttp {
     }
 }
 
+/// TTL response cache over an [`HttpGet`], for endpoints whose data is
+/// server-cached anyway (e.g. poe.ninja's ~5-minute economy snapshots):
+/// repeat lookups within the window are served locally, which is both
+/// faster and the polite client behavior the API docs ask for.
+/// Successful bodies are cached per URL; errors are never cached. Expired
+/// entries are evicted on insert, bounding the cache to URLs fetched
+/// within one TTL window (bodies run to hundreds of kilobytes).
+pub struct CachedHttp {
+    inner: Box<dyn HttpGet>,
+    ttl: Duration,
+    entries: std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, String)>>,
+}
+
+impl CachedHttp {
+    /// Wrap `inner` with a per-URL TTL cache.
+    #[must_use]
+    pub fn new(inner: Box<dyn HttpGet>, ttl: Duration) -> Self {
+        Self {
+            inner,
+            ttl,
+            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+impl HttpGet for CachedHttp {
+    fn get(&self, url: &str) -> Result<String, String> {
+        {
+            let entries = self.entries.lock().expect("cache lock");
+            if let Some((stored_at, body)) = entries.get(url)
+                && stored_at.elapsed() < self.ttl
+            {
+                return Ok(body.clone());
+            }
+        }
+        let body = self.inner.get(url)?;
+        let mut entries = self.entries.lock().expect("cache lock");
+        entries.retain(|_, (stored_at, _)| stored_at.elapsed() < self.ttl);
+        entries.insert(url.to_owned(), (std::time::Instant::now(), body.clone()));
+        Ok(body)
+    }
+}
+
 /// Current UTC time as `YYYY-MM-DDTHH:MM:SSZ`, for `fetched_at` stamps.
 #[must_use]
 pub fn now_utc() -> String {
@@ -180,6 +223,73 @@ mod tests {
     #[test]
     fn fail_http_always_fails() {
         assert!(FailHttp.get("https://example.com").is_err());
+    }
+
+    #[test]
+    fn cached_http_serves_repeats_and_never_caches_errors() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        struct Counting {
+            calls: Arc<AtomicUsize>,
+            fail: bool,
+        }
+        impl HttpGet for Counting {
+            fn get(&self, url: &str) -> Result<String, String> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if self.fail {
+                    Err("down".to_owned())
+                } else {
+                    Ok(format!("body for {url}"))
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = super::CachedHttp::new(
+            Box::new(Counting {
+                calls: Arc::clone(&calls),
+                fail: false,
+            }),
+            Duration::from_mins(1),
+        );
+        assert!(cache.get("https://x/a").is_ok());
+        assert!(cache.get("https://x/a").is_ok());
+        assert!(cache.get("https://x/b").is_ok());
+        // Two distinct URLs → two upstream calls; the repeat was cached.
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let failures = Arc::new(AtomicUsize::new(0));
+        let cache = super::CachedHttp::new(
+            Box::new(Counting {
+                calls: Arc::clone(&failures),
+                fail: true,
+            }),
+            Duration::from_mins(1),
+        );
+        assert!(cache.get("https://x/a").is_err());
+        assert!(cache.get("https://x/a").is_err());
+        // Errors are never cached: both attempts hit upstream.
+        assert_eq!(failures.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cached_http_evicts_expired_entries_on_insert() {
+        use std::time::Duration;
+        struct Ok200;
+        impl HttpGet for Ok200 {
+            fn get(&self, _url: &str) -> Result<String, String> {
+                Ok("body".to_owned())
+            }
+        }
+
+        // Zero TTL: every entry is expired by the next insert, so the map
+        // never holds more than the entry just written.
+        let cache = super::CachedHttp::new(Box::new(Ok200), Duration::ZERO);
+        for url in ["https://x/a", "https://x/b", "https://x/c"] {
+            assert!(cache.get(url).is_ok());
+            assert_eq!(cache.entries.lock().expect("lock").len(), 1);
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ members = [
     "crates/exile-cli",
     "crates/exile-toolkit",
     "crates/exile-tools/exile-league",
+    "crates/exile-tools/exile-ninja",
     "crates/exile-tools/exile-wiki",
     "eval",
 ]
@@ -23,6 +24,7 @@ repository = "https://github.com/timeloop-vault/exile-harness"
 exile-core = { path = "crates/exile-core" }
 exile-league = { path = "crates/exile-tools/exile-league" }
 exile-llm = { path = "crates/exile-llm" }
+exile-ninja = { path = "crates/exile-tools/exile-ninja" }
 exile-tool-api = { path = "crates/exile-tool-api" }
 exile-toolkit = { path = "crates/exile-toolkit" }
 exile-wiki = { path = "crates/exile-tools/exile-wiki" }
