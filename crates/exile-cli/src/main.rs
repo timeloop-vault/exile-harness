@@ -152,6 +152,9 @@ fn build_registry() -> ToolRegistry {
         .register(Box::new(exile_ninja::PriceTool::new()))
         .expect("price tool name is unique");
     registry
+        .register(Box::new(exile_pob::PobTool::new()))
+        .expect("pob tool name is unique");
+    registry
 }
 
 /// Build the session (with or without a model) and its banner line.

@@ -114,6 +114,18 @@ enum Expect {
         /// Required substrings.
         values: Vec<String>,
     },
+    /// Answer must contain the named stat of a synthetic build, computed
+    /// by the pob tool at eval time (law 2: the engine is ground truth).
+    /// The build's share code is generated from `xml` and substituted
+    /// for `{code}` in the prompt — nothing game-derived is vendored.
+    PobStat {
+        /// `poe1` | `poe2`.
+        game: String,
+        /// The `mainOutput` stat key to grade on (e.g. `Life`).
+        stat: String,
+        /// Minimal synthetic build XML (an input fixture).
+        xml: String,
+    },
 }
 
 /// A resolved grading rule for one question.
@@ -183,19 +195,25 @@ fn value_present(answer_lower: &str, value: &str) -> bool {
     }
 }
 
-/// Resolve a question's grading rule, calling the league tool for
-/// ground-truth kinds.
-fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Grading, String> {
-    match expect {
-        Expect::ContainsAny { values } => Ok(Grading::Any(values.clone())),
-        Expect::ContainsAll { values } => Ok(Grading::All(values.clone())),
+/// Resolve a question's grading rule and final prompt, calling tools for
+/// ground-truth kinds. `pob-stat` questions also get their `{code}`
+/// placeholder substituted with the eval-time share code.
+fn resolve_question(
+    question: &Question,
+    league: &dyn Tool,
+    pob: &dyn Tool,
+) -> Result<(Grading, String), String> {
+    let prompt = question.prompt.clone();
+    match &question.expect {
+        Expect::ContainsAny { values } => Ok((Grading::Any(values.clone()), prompt)),
+        Expect::ContainsAll { values } => Ok((Grading::All(values.clone()), prompt)),
         Expect::ChallengeLeagueId { game } => {
             let result = league
                 .execute(&format!(r#"{{"game":"{game}"}}"#))
                 .map_err(|err| format!("ground-truth league call failed: {err}"))?;
             let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
             challenge_league_id(&result)
-                .map(|id| Grading::Any(vec![id]))
+                .map(|id| (Grading::Any(vec![id]), prompt))
                 .ok_or_else(|| "no challenge league in tool result".to_owned())
         }
         Expect::LatestPastLeague { game } => {
@@ -204,8 +222,27 @@ fn resolve_expected(expect: &Expect, league: &dyn Tool) -> Result<Grading, Strin
                 .map_err(|err| format!("ground-truth league call failed: {err}"))?;
             let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
             latest_past_league(&result)
-                .map(|name| Grading::Any(vec![name]))
+                .map(|name| (Grading::Any(vec![name]), prompt))
                 .ok_or_else(|| "no past leagues in tool result".to_owned())
+        }
+        Expect::PobStat { game, stat, xml } => {
+            let request = serde_json::json!({"game": game, "xml": xml, "stats": [stat]});
+            let result = pob
+                .execute(&request.to_string())
+                .map_err(|err| format!("ground-truth pob call failed: {err}"))?;
+            let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
+            let value = &result["build"]["stats"][stat];
+            let expected = value
+                .as_i64()
+                .map(|whole| whole.to_string())
+                .or_else(|| value.as_f64().map(|number| number.to_string()))
+                .ok_or_else(|| format!("stat `{stat}` missing from pob result"))?;
+            let code = exile_pob::codes::encode(xml)
+                .map_err(|err| format!("encoding fixture build failed: {err}"))?;
+            Ok((
+                Grading::Any(vec![expected]),
+                prompt.replace("{code}", &code).replace("{xml}", xml),
+            ))
         }
     }
 }
@@ -228,6 +265,9 @@ fn ask(
     registry
         .register(Box::new(exile_ninja::PriceTool::new()))
         .expect("price tool name is unique");
+    registry
+        .register(Box::new(exile_pob::PobTool::new()))
+        .expect("pob tool name is unique");
     let client = OpenAiClient::for_profile(profile)?;
     let mut session = Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned());
     if let Some(rounds) = max_tool_rounds {
@@ -305,7 +345,8 @@ fn main() -> ExitCode {
     let max_tool_rounds = config.limits.max_tool_rounds;
     let profile = &profile;
     let file: QuestionFile = toml::from_str(QUESTIONS).expect("questions.toml is pinned by tests");
-    let ground_truth_tool = exile_league::LeagueTool::new();
+    let ground_truth_league = exile_league::LeagueTool::new();
+    let ground_truth_pob = exile_pob::PobTool::new();
 
     let selected: Vec<&Question> = file
         .questions
@@ -328,15 +369,16 @@ fn main() -> ExitCode {
             println!("SKIP {} — parked: {reason}", question.id);
             continue;
         }
-        let accepted = match resolve_expected(&question.expect, &ground_truth_tool) {
-            Ok(accepted) => accepted,
-            Err(err) => {
-                failures += 1;
-                println!("FAIL {} — ground truth unavailable: {err}", question.id);
-                continue;
-            }
-        };
-        match ask(profile, max_tool_rounds, &question.prompt) {
+        let (accepted, prompt) =
+            match resolve_question(question, &ground_truth_league, &ground_truth_pob) {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    failures += 1;
+                    println!("FAIL {} — ground truth unavailable: {err}", question.id);
+                    continue;
+                }
+            };
+        match ask(profile, max_tool_rounds, &prompt) {
             Err(err) => {
                 failures += 1;
                 println!("FAIL {} — {err}", question.id);

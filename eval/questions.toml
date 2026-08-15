@@ -142,23 +142,63 @@ values = ["120"]
 # Parked 2026-08-15: fails consistently at temperature 0 — the model
 # states "more is multiplicative" in the stacking question above, then
 # sums anyway when computing (1.1 × 1.1 → "120"). That is law 2 in
-# action, not a harness regression; un-park by re-pointing at a calc
-# tool when one lands (#19).
+# action, not a harness regression. The pob tool (#31) computes whole
+# builds, not abstract formulas, so this stays parked until a
+# modifier-calc surface exists; the pob-build-* questions below carry
+# the "route math to the engine" guard meanwhile.
 [[questions]]
 id = "mechanics-two-more-math"
 prompt = "In Path of Exile 1, I deal 100 base damage and have two separate '10% more damage' multipliers and nothing else. What is my total damage? Just the number and one sentence why."
 expect = "contains-any"
 values = ["121"]
-parked = "LLM arithmetic is not a trusted path (law 2); re-point at a calc tool (#19)"
+parked = "LLM arithmetic is not a trusted path (law 2); needs a modifier-calc surface — the pob tool computes builds, not formulas"
 
+# Parked 2026-08-16: same failure class as two-more-math above — the
+# model sums multiplicative "less" modifiers (20% + 10% → "30%") at
+# temperature 0. The additive probe (two-increased-math) still passes
+# and stays active.
 [[questions]]
 id = "mechanics-less-stacking-math"
 prompt = "In Path of Exile 1, I have one '20% less damage' modifier and one '10% less damage' modifier. What is the total damage reduction? Just the number and one sentence why."
 expect = "contains-any"
 values = ["28"]
+parked = "LLM arithmetic is not a trusted path (law 2); needs a modifier-calc surface — the pob tool computes builds, not formulas"
 
 [[questions]]
 id = "mechanics-rare-item-mod-count"
 prompt = "In Path of Exile 1, how many explicit modifiers can a standard rare item have at most? One sentence."
 expect = "contains-any"
 values = ["6", "six"]
+
+# ── Build math through the engine ───────────────────────────────────────
+#
+# Law 2 made executable: the model gets a Path of Building build and must
+# route the math to the pob tool. The build is a minimal synthetic XML
+# (an input fixture, not a game fact) substituted for {xml}, and the
+# expected stat value is computed by the same engine at eval time — no
+# numbers are vendored, so these survive engine data updates.
+#
+# Deliberately XML, not a share code: qwen3.6:35b was observed corrupting
+# a 100-char base64 code mid-copy in its tool call (hallucinated 13 chars
+# away), while it copies meaningful XML reliably. What these questions
+# grade is "routes math to the engine", not base64 transcription — the
+# code path is covered by unit and live tests. Reference-passing for
+# large opaque arguments is tracked as a harness follow-up (#32).
+
+[[questions]]
+id = "pob-build-life-poe1"
+prompt = "Here is a Path of Exile 1 Path of Building build XML: `{xml}` — what is this build's Life? Answer with just the number and the engine version you used."
+expect = "pob-stat"
+game = "poe1"
+stat = "Life"
+xml = '<PathOfBuilding><Build level="1" targetVersion="3_0"/></PathOfBuilding>'
+digits = "required"
+
+[[questions]]
+id = "pob-build-life-poe2"
+prompt = "Here is a Path of Exile 2 Path of Building build XML: `{xml}` — what is this build's Life? Answer with just the number and the engine version you used."
+expect = "pob-stat"
+game = "poe2"
+stat = "Life"
+xml = '<PathOfBuilding><Build level="1" targetVersion="0_1"/></PathOfBuilding>'
+digits = "required"
