@@ -15,10 +15,18 @@
 
 mod text;
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 use exile_tool_api::{Tool, ToolError};
-use exile_toolkit::{Game, HttpGet, UreqHttp, now_utc, percent_encode};
+use exile_toolkit::{Game, HttpGet, UreqHttp, VintageCache, now_utc, percent_encode};
 use serde::Deserialize;
 use serde_json::Value;
+
+/// How long a cached page stays fresh. Wiki articles change on patch
+/// cadence, not minutes — a day balances rate courtesy against staleness
+/// (Tier B: the vintage is always visible, and `refresh` forces live).
+const PAGE_CACHE_TTL: Duration = Duration::from_hours(24);
 
 /// Default article-text budget in characters; large articles are
 /// truncated with an explicit marker in the result.
@@ -38,24 +46,43 @@ struct Args {
     page: Option<String>,
     limit: Option<u32>,
     max_chars: Option<usize>,
+    refresh: Option<bool>,
 }
 
 /// The `wiki` tool: search + article retrieval over the community wikis.
+/// Page fetches go through a disk cache with vintage stamps (Tier B);
+/// searches are always live.
 pub struct WikiTool {
-    http: Box<dyn HttpGet>,
+    cache: VintageCache,
 }
 
 impl WikiTool {
-    /// Tool with the live HTTP client.
+    /// Tool with the live HTTP client and the on-disk page cache
+    /// (`EXILE_WIKI_CACHE_DIR`, default `.exile-cache/wiki` — gitignored).
     #[must_use]
     pub fn new() -> Self {
-        Self::with_http(Box::new(UreqHttp::new()))
+        let dir = std::env::var_os("EXILE_WIKI_CACHE_DIR")
+            .map_or_else(|| PathBuf::from(".exile-cache/wiki"), PathBuf::from);
+        Self::with_cache(Box::new(UreqHttp::new()), dir, PAGE_CACHE_TTL)
     }
 
-    /// Tool with an injected HTTP implementation (tests).
+    /// Tool with an injected HTTP implementation and effectively no
+    /// caching (zero TTL) — the constructor unit tests use.
     #[must_use]
     pub fn with_http(http: Box<dyn HttpGet>) -> Self {
-        Self { http }
+        Self::with_cache(
+            http,
+            std::env::temp_dir().join("exile-wiki-uncached"),
+            Duration::ZERO,
+        )
+    }
+
+    /// Tool with explicit cache location and TTL (cache-behavior tests).
+    #[must_use]
+    pub fn with_cache(http: Box<dyn HttpGet>, cache_dir: PathBuf, ttl: Duration) -> Self {
+        Self {
+            cache: VintageCache::new(http, cache_dir, ttl),
+        }
     }
 
     fn site(game: Game) -> &'static str {
@@ -72,7 +99,7 @@ impl WikiTool {
             Self::site(game),
             percent_encode(query)
         );
-        let body = self.http.get(&url).map_err(ToolError::Failed)?;
+        let body = self.cache.live(&url).map_err(ToolError::Failed)?;
         let value = parse_api_json(&body, &url)?;
         if let Some(error) = value.get("error") {
             let info = error["info"].as_str().unwrap_or("unknown wiki API error");
@@ -100,15 +127,26 @@ impl WikiTool {
     /// Fetch the *rendered* page (`prop=text`), not raw wikitext: the
     /// wikis' hard data is template-generated, so only the rendered HTML
     /// contains it.
-    fn page(&self, game: Game, title: &str, max_chars: usize) -> Result<Value, ToolError> {
+    fn page(
+        &self,
+        game: Game,
+        title: &str,
+        max_chars: usize,
+        refresh: bool,
+    ) -> Result<Value, ToolError> {
         let url = format!(
             "{}/w/api.php?action=parse&format=json&formatversion=2&prop=text&redirects=1\
              &disablelimitreport=true&disableeditsection=true&disabletoc=true&page={}",
             Self::site(game),
             percent_encode(title)
         );
-        let body = self.http.get(&url).map_err(ToolError::Failed)?;
-        let value = parse_api_json(&body, &url)?;
+        // Validation mirrors parse_api_json's HTML check: an anti-bot
+        // page served with HTTP 200 must never poison the cache.
+        let fetch = self
+            .cache
+            .get_validated(&url, refresh, |body| !body.trim_start().starts_with('<'))
+            .map_err(ToolError::Failed)?;
+        let value = parse_api_json(&fetch.body, &url)?;
         if let Some(error) = value.get("error") {
             let info = error["info"].as_str().unwrap_or("unknown wiki API error");
             return Err(ToolError::Failed(format!(
@@ -128,12 +166,23 @@ impl WikiTool {
         } else {
             readable
         };
+        // Cache-vs-live is part of the citation: a cached article's
+        // vintage is when it was retrieved, not when this call ran.
+        let source = if fetch.from_cache {
+            format!(
+                "{url} (local cache, retrieved {}; pass refresh:true for live)",
+                fetch.retrieved_at
+            )
+        } else {
+            url
+        };
         Ok(serde_json::json!({
             "title": resolved_title,
             "text": text,
             "truncated": truncated,
             "total_chars": total_chars,
-            "source": url,
+            "retrieved_at": fetch.retrieved_at,
+            "source": source,
         }))
     }
 }
@@ -169,11 +218,12 @@ impl Tool for WikiTool {
          Path of Exile 1, poe2wiki.net for Path of Exile 2). Search with SHORT keyword \
          queries (1-3 words, like article titles: 'resistance', 'Kitava'), or fetch a \
          page directly by its exact title. ALWAYS fetch the `page` before answering — \
-         snippets only locate pages. Cite the source URL."
+         snippets only locate pages. Cite the source URL. Pages are cached locally for a \
+         day and results state their vintage; pass `refresh` to force a live fetch."
     }
 
     fn parameters_schema(&self) -> &'static str {
-        r#"{"type":"object","properties":{"game":{"type":"string","enum":["poe1","poe2"],"description":"Which game's wiki"},"search":{"type":"string","description":"Full-text search query (provide exactly one of search or page)"},"page":{"type":"string","description":"Exact page title to fetch (provide exactly one of search or page)"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Max search results (default 8)"},"max_chars":{"type":"integer","description":"Article text budget in characters (default 8000)"}},"required":["game"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"game":{"type":"string","enum":["poe1","poe2"],"description":"Which game's wiki"},"search":{"type":"string","description":"Full-text search query (provide exactly one of search or page)"},"page":{"type":"string","description":"Exact page title to fetch (provide exactly one of search or page)"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Max search results (default 8)"},"max_chars":{"type":"integer","description":"Article text budget in characters (default 8000)"},"refresh":{"type":"boolean","description":"Force a live re-fetch of a cached page"}},"required":["game"],"additionalProperties":false}"#
     }
 
     fn execute(&self, args_json: &str) -> Result<String, ToolError> {
@@ -205,7 +255,10 @@ impl Tool for WikiTool {
                     ));
                 }
                 let max_chars = args.max_chars.unwrap_or(DEFAULT_MAX_CHARS).max(200);
-                result.insert("page".to_owned(), self.page(args.game, title, max_chars)?);
+                result.insert(
+                    "page".to_owned(),
+                    self.page(args.game, title, max_chars, args.refresh.unwrap_or(false))?,
+                );
             }
             _ => {
                 return Err(ToolError::InvalidArgs(
@@ -313,6 +366,96 @@ mod tests {
                 "{game} must hit {host}"
             );
         }
+    }
+
+    #[test]
+    fn pages_are_cached_with_vintage_and_refresh_forces_live() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counting {
+            calls: Arc<AtomicUsize>,
+        }
+        impl exile_toolkit::HttpGet for Counting {
+            fn get(&self, _url: &str) -> Result<String, String> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(PAGE_FIXTURE.to_owned())
+            }
+        }
+
+        let dir =
+            std::env::temp_dir().join(format!("exile-wiki-test-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = WikiTool::with_cache(
+            Box::new(Counting {
+                calls: Arc::clone(&calls),
+            }),
+            dir.clone(),
+            std::time::Duration::from_mins(5),
+        );
+
+        let live = parse(
+            &tool
+                .execute(r#"{"game":"poe1","page":"Maps"}"#)
+                .expect("live fetch"),
+        );
+        let live_source = live["page"]["source"].as_str().expect("source").to_owned();
+        assert!(!live_source.contains("cache"), "first fetch is live");
+        let vintage = live["page"]["retrieved_at"]
+            .as_str()
+            .expect("stamp")
+            .to_owned();
+
+        // Second fetch: served from cache, vintage preserved and visible.
+        let cached = parse(
+            &tool
+                .execute(r#"{"game":"poe1","page":"Maps"}"#)
+                .expect("cache hit"),
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no second live fetch");
+        let cached_source = cached["page"]["source"].as_str().expect("source");
+        assert!(
+            cached_source.contains("local cache"),
+            "got: {cached_source}"
+        );
+        assert!(
+            cached_source.contains(&vintage),
+            "vintage visible in source"
+        );
+        assert_eq!(cached["page"]["retrieved_at"], vintage.as_str());
+
+        // refresh bypasses the valid entry.
+        let refreshed = parse(
+            &tool
+                .execute(r#"{"game":"poe1","page":"Maps","refresh":true}"#)
+                .expect("forced live"),
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "refresh hits upstream");
+        assert!(
+            !refreshed["page"]["source"]
+                .as_str()
+                .expect("source")
+                .contains("cache")
+        );
+
+        // Searches are never cached: two calls, two upstream hits.
+        let tool = WikiTool::with_cache(
+            Box::new(FakeHttp {
+                routes: vec![("poewiki.net", SEARCH_FIXTURE)],
+            }),
+            dir.clone(),
+            std::time::Duration::from_mins(5),
+        );
+        tool.execute(r#"{"game":"poe1","search":"maps"}"#)
+            .expect("searches");
+        tool.execute(r#"{"game":"poe1","search":"maps"}"#)
+            .expect("searches");
+        // (FakeHttp cannot count, but a cached search would have written an
+        // entry; assert the cache dir holds exactly the one page entry.)
+        let entries = std::fs::read_dir(&dir).expect("cache dir").count();
+        assert_eq!(entries, 1, "only the page fetch is cached");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

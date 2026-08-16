@@ -14,6 +14,12 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
+
+/// Wall-clock budget per question. Per-completion timeouts alone are not
+/// enough: a question may span up to `max_tool_rounds` completions, so a
+/// grinding model could otherwise hold the run for rounds × ceiling.
+const QUESTION_TIMEOUT: Duration = Duration::from_mins(15);
 
 use exile_core::{Event, Session};
 use exile_llm::{Config, OpenAiClient};
@@ -247,6 +253,36 @@ fn resolve_question(
     }
 }
 
+/// Run [`ask`] on its own thread with a wall-clock budget. On timeout the
+/// worker thread is abandoned — its in-flight request dies by the
+/// per-completion timeouts (bounded leak, accepted for an eval binary;
+/// process isolation would be over-engineering). Consequence to keep in
+/// mind when reading results: an abandoned worker keeps the model
+/// endpoint busy until those timeouts fire, so the question right after
+/// a budget failure can run slower than usual.
+fn ask_with_budget(
+    profile: &exile_llm::Profile,
+    max_tool_rounds: Option<usize>,
+    question: &str,
+) -> Result<String, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let profile = profile.clone();
+    let question = question.to_owned();
+    std::thread::spawn(move || {
+        let _ = sender.send(ask(&profile, max_tool_rounds, &question));
+    });
+    match receiver.recv_timeout(QUESTION_TIMEOUT) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "question exceeded the {}s eval budget",
+            QUESTION_TIMEOUT.as_secs()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("eval worker crashed before answering (panic) — check stderr".to_owned())
+        }
+    }
+}
+
 /// Run one question through a fresh session; returns the assistant's full
 /// text, or an error description if the turn failed.
 fn ask(
@@ -378,7 +414,7 @@ fn main() -> ExitCode {
                     continue;
                 }
             };
-        match ask(profile, max_tool_rounds, &prompt) {
+        match ask_with_budget(profile, max_tool_rounds, &prompt) {
             Err(err) => {
                 failures += 1;
                 println!("FAIL {} — {err}", question.id);
