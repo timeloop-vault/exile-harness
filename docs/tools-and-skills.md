@@ -67,8 +67,17 @@ the build until ≥2 real recipe documents exist.
 1. **Flat registration stays; no router/mega-tool, no micro-splitting.**
    Wiki remains one tool (its two modes share one cheap schema). Revisit
    only if eval shows mode-selection errors, or past ~10 visible tools —
-   at which point the answer is deferred/shortlisted exposure (ties into
-   #20), not splitting.
+   at which point two levers exist, neither of which is splitting:
+   *deferred/shortlisted exposure* (ties into #20), and **agent-level
+   partitioning** — an orchestration layer where sub-agents own focused
+   tool subsets and behaviors (OpenAI's guidance for large surfaces is
+   exactly "role-specific sub-agents with 4–6 tools each"). Partitioning
+   caps any one agent's always-loaded context but pays in latency and
+   extra hops — and hops are the measured small-model cliff — so it fits
+   when a flow justifies a dedicated agent, not as a default. The core's
+   design anticipates it: sessions compose cheaply over the typed event
+   stream, so an orchestrating agent driving specialist sessions is an
+   arrangement of existing pieces, not new architecture.
 2. **New capability lands as workflow-shaped tools** — the tool runs the
    fixed sequence internally and returns the synthesized result, keeping
    intermediate data out of context and cutting model hops:
@@ -104,3 +113,45 @@ the build until ≥2 real recipe documents exist.
   skills mechanism (deferred, design pinned above).
 - The roadmap's future tool crates (patch-notes, gamedata, trade) inherit
   rules 1–3: workflow-shaped, distinct names, policy-free descriptions.
+
+## References
+
+Vendor guidance:
+
+- Anthropic, *Writing effective tools for agents* —
+  <https://www.anthropic.com/engineering/writing-tools-for-agents>
+- Anthropic, *Building effective agents* —
+  <https://www.anthropic.com/engineering/building-effective-agents>
+- Anthropic, *Effective context engineering for AI agents* —
+  <https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents>
+- Anthropic tool-use tips —
+  <https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview>
+- OpenAI function-calling guide (<20 visible functions, merge fixed
+  sequences, strict schemas) —
+  <https://developers.openai.com/api/docs/guides/function-calling>
+- Qwen function-calling docs (harness-side validation expected,
+  description/example guidance) —
+  <https://qwen.readthedocs.io/en/latest/framework/function_call.html>
+
+Skills prior art:
+
+- Anthropic, *Equipping agents for the real world with Agent Skills* —
+  <https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills>
+- Claude Code skills mechanics —
+  <https://code.claude.com/docs/en/skills>
+- Open skill spec — <https://agentskills.io/specification>
+- MCP prompts primitive —
+  <https://modelcontextprotocol.io/specification/2025-06-18/server/prompts>
+
+Benchmarks and papers (inline arXiv IDs above):
+
+- Berkeley Function Calling Leaderboard —
+  <https://gorilla.cs.berkeley.edu/leaderboard.html>
+- LongFuncEval (tool-count/context degradation) — arXiv 2505.10570
+- RAG-MCP (prompt bloat, retrieval shortlisting) — arXiv 2505.03275
+- Adaptive tool-list depth — arXiv 2605.24660
+- Hammer (name over-reliance, function masking) — arXiv 2410.04587
+- TinyLLM (per-size BFCL breakdowns, multi-turn cliff) — arXiv 2511.22138
+- Qwen3 Technical Report (BFCL v3 scores) — arXiv 2505.09388
+- Constraint tax (structured output vs tool invocation) — arXiv
+  2606.25605, 2605.26128
