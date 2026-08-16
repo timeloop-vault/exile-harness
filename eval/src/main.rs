@@ -255,7 +255,11 @@ fn resolve_question(
 
 /// Run [`ask`] on its own thread with a wall-clock budget. On timeout the
 /// worker thread is abandoned — its in-flight request dies by the
-/// per-completion timeouts, and the process outlives it only briefly.
+/// per-completion timeouts (bounded leak, accepted for an eval binary;
+/// process isolation would be over-engineering). Consequence to keep in
+/// mind when reading results: an abandoned worker keeps the model
+/// endpoint busy until those timeouts fire, so the question right after
+/// a budget failure can run slower than usual.
 fn ask_with_budget(
     profile: &exile_llm::Profile,
     max_tool_rounds: Option<usize>,
@@ -269,10 +273,13 @@ fn ask_with_budget(
     });
     match receiver.recv_timeout(QUESTION_TIMEOUT) {
         Ok(result) => result,
-        Err(_) => Err(format!(
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
             "question exceeded the {}s eval budget",
             QUESTION_TIMEOUT.as_secs()
         )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("eval worker crashed before answering (panic) — check stderr".to_owned())
+        }
     }
 }
 

@@ -218,18 +218,34 @@ impl VintageCache {
     /// Fetch `url`, serving from disk when a fresh entry exists and
     /// `refresh` is false.
     pub fn get(&self, url: &str, refresh: bool) -> Result<VintageFetch, String> {
+        self.get_validated(url, refresh, |_| true)
+    }
+
+    /// Like [`Self::get`], but only bodies accepted by `valid` are ever
+    /// cached or served from cache. This keeps transient upstream junk
+    /// (e.g. an anti-bot challenge page served with HTTP 200) from
+    /// poisoning an entry for a whole TTL: an invalid live body is
+    /// returned to the caller uncached, and an invalid cached entry is
+    /// deleted and refetched live.
+    pub fn get_validated(
+        &self,
+        url: &str,
+        refresh: bool,
+        valid: impl Fn(&str) -> bool,
+    ) -> Result<VintageFetch, String> {
         let path = self
             .dir
             .join(format!("{:016x}.json", fnv1a64(url.as_bytes())));
-        if !refresh
-            && let Some(entry) = read_entry(&path, url)
-            && !entry_expired(&entry.retrieved_at, self.ttl)
-        {
-            return Ok(VintageFetch {
-                body: entry.body,
-                retrieved_at: entry.retrieved_at,
-                from_cache: true,
-            });
+        if !refresh && let Some(entry) = read_entry(&path, url) {
+            if entry_expired(&entry.retrieved_at, self.ttl) || !valid(&entry.body) {
+                let _ = std::fs::remove_file(&path);
+            } else {
+                return Ok(VintageFetch {
+                    body: entry.body,
+                    retrieved_at: entry.retrieved_at,
+                    from_cache: true,
+                });
+            }
         }
 
         let body = self.inner.get(url)?;
@@ -237,7 +253,7 @@ impl VintageCache {
         // Best effort: a failed write only costs the caching, never the
         // fetch. The entry records its URL so hash collisions can never
         // serve the wrong page.
-        if std::fs::create_dir_all(&self.dir).is_ok() {
+        if valid(&body) && std::fs::create_dir_all(&self.dir).is_ok() {
             let entry = serde_json::json!({
                 "url": url,
                 "retrieved_at": retrieved_at,
@@ -495,6 +511,69 @@ mod tests {
         );
         let expired = cache.get("https://x/page", false).expect("expired refetch");
         assert!(!expired.from_cache);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vintage_cache_validation_blocks_and_heals_poisoned_entries() {
+        use std::time::Duration;
+        let dir =
+            std::env::temp_dir().join(format!("exile-toolkit-test-poison-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let not_html = |body: &str| !body.trim_start().starts_with('<');
+
+        // An invalid live body is returned to the caller but never cached.
+        let cache = super::VintageCache::new(
+            Box::new(FakeHttp {
+                routes: vec![("x/page", "<html>anti-bot challenge</html>")],
+            }),
+            dir.clone(),
+            Duration::from_mins(5),
+        );
+        let fetched = cache
+            .get_validated("https://x/page", false, not_html)
+            .expect("fetches");
+        assert!(!fetched.from_cache);
+        assert!(
+            std::fs::read_dir(&dir).map_or(true, |mut d| d.next().is_none()),
+            "invalid body must not be written to disk"
+        );
+
+        // A poisoned entry already on disk is dropped and refetched live.
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join(format!(
+            "{:016x}.json",
+            super::fnv1a64("https://x/page".as_bytes())
+        ));
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "url": "https://x/page",
+                "retrieved_at": now_utc(),
+                "body": "<html>poisoned</html>",
+            })
+            .to_string(),
+        )
+        .expect("write poison");
+        let cache = super::VintageCache::new(
+            Box::new(FakeHttp {
+                routes: vec![("x/page", "recovered json body")],
+            }),
+            dir.clone(),
+            Duration::from_mins(5),
+        );
+        let healed = cache
+            .get_validated("https://x/page", false, not_html)
+            .expect("heals");
+        assert!(!healed.from_cache, "poison must not be served");
+        assert_eq!(healed.body, "recovered json body");
+        // And the good body is now cached.
+        let cached = cache
+            .get_validated("https://x/page", false, not_html)
+            .expect("cache hit");
+        assert!(cached.from_cache);
+        assert_eq!(cached.body, "recovered json body");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -140,7 +140,12 @@ impl WikiTool {
             Self::site(game),
             percent_encode(title)
         );
-        let fetch = self.cache.get(&url, refresh).map_err(ToolError::Failed)?;
+        // Validation mirrors parse_api_json's HTML check: an anti-bot
+        // page served with HTTP 200 must never poison the cache.
+        let fetch = self
+            .cache
+            .get_validated(&url, refresh, |body| !body.trim_start().starts_with('<'))
+            .map_err(ToolError::Failed)?;
         let value = parse_api_json(&fetch.body, &url)?;
         if let Some(error) = value.get("error") {
             let info = error["info"].as_str().unwrap_or("unknown wiki API error");
