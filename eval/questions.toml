@@ -133,11 +133,17 @@ prompt = "In Path of Exile 1, do multiple 'increased damage' modifiers stack add
 expect = "contains-all"
 values = ["additive", "multiplicative"]
 
+# Parked 2026-08-16: the last of the three arithmetic probes. After
+# prompt rule 7 (never compute; ask for a build) the model grinds on
+# this question — twice past the request ceiling — because it asks for
+# exactly what the constitution forbids. The pob-build-* questions
+# carry the route-math-to-the-engine guard.
 [[questions]]
 id = "mechanics-two-increased-math"
 prompt = "In Path of Exile 1, I deal 100 base damage and have two separate '10% increased damage' modifiers and nothing else. What is my total damage? Just the number and one sentence why."
 expect = "contains-any"
 values = ["120"]
+parked = "LLM arithmetic is not a trusted path (law 2); rule 7 makes the model rightly refuse-or-grind — needs a modifier-calc surface"
 
 # Parked 2026-08-15: fails consistently at temperature 0 — the model
 # states "more is multiplicative" in the stacking question above, then
