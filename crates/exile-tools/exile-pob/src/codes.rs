@@ -18,10 +18,15 @@ const MAX_XML_BYTES: u64 = 16 * 1024 * 1024;
 pub fn decode(code: &str) -> Result<String, String> {
     let compressed = base64_decode(code.trim())?;
     let mut xml = String::new();
+    // Read one byte past the ceiling so an oversized inflation is an
+    // error instead of a silent truncation.
     ZlibDecoder::new(compressed.as_slice())
-        .take(MAX_XML_BYTES)
+        .take(MAX_XML_BYTES + 1)
         .read_to_string(&mut xml)
         .map_err(|err| format!("build code did not inflate to text: {err}"))?;
+    if xml.len() as u64 > MAX_XML_BYTES {
+        return Err("build code inflates beyond the size ceiling".to_owned());
+    }
     if xml.is_empty() {
         return Err("build code inflated to nothing".to_owned());
     }
@@ -166,5 +171,13 @@ mod tests {
         assert!(decode("not a code!!").is_err());
         // Valid base64, not valid zlib.
         assert!(decode("aGVsbG8gd29ybGQ").is_err());
+    }
+
+    #[test]
+    fn oversized_inflation_is_an_error_not_a_truncation() {
+        let huge = "x".repeat(usize::try_from(MAX_XML_BYTES).expect("fits") + 1);
+        let code = encode(&huge).expect("encodes");
+        let err = decode(&code).expect_err("must not truncate silently");
+        assert!(err.contains("size ceiling"), "got: {err}");
     }
 }

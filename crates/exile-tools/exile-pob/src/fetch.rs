@@ -86,6 +86,14 @@ fn unpack(reader: impl Read, target: &Path) -> Result<(), String> {
         let Some(stripped) = strip_top_level(&path) else {
             continue; // the top-level directory entry itself
         };
+        // Entry-by-entry unpack bypasses tar's whole-archive sanitizing,
+        // so containment is enforced here: no `..`, no absolute paths.
+        if !contained(&stripped) {
+            return Err(format!(
+                "archive entry escapes the target directory: {}",
+                path.display()
+            ));
+        }
         entry
             .unpack(target.join(&stripped))
             .map_err(|err| format!("unpacking {} failed: {err}", stripped.display()))?;
@@ -103,6 +111,13 @@ fn strip_top_level(path: &Path) -> Option<PathBuf> {
     } else {
         Some(rest.to_owned())
     }
+}
+
+/// True when every component is a plain name — nothing that could step
+/// outside the unpack target.
+fn contained(path: &Path) -> bool {
+    path.components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 fn is_populated(dir: &Path) -> bool {
@@ -133,6 +148,14 @@ mod tests {
         );
         assert_eq!(strip_top_level(Path::new("PathOfBuilding-dev/")), None);
         assert_eq!(strip_top_level(Path::new("PathOfBuilding-dev")), None);
+    }
+
+    #[test]
+    fn traversal_paths_are_rejected() {
+        assert!(contained(Path::new("src/Launch.lua")));
+        assert!(!contained(Path::new("../evil")));
+        assert!(!contained(Path::new("src/../../evil")));
+        assert!(!contained(Path::new("/absolute/evil")));
     }
 
     #[test]

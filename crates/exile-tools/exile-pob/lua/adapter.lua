@@ -1,8 +1,10 @@
 -- JSON-lines stdio adapter over a STOCK Path of Building checkout
 -- (Path of Exile 1 or 2 — the engine is chosen by the working directory).
 --
--- Run from the engine's src/ directory:
---   cd vendor/pob/<game>/src && luajit ../../../../spikes/pob-headless/adapter.lua
+-- This file is embedded into exile-pob at build time and materialized
+-- to a temp file at spawn; the tool runs it as `luajit <adapter>` with
+-- cwd = <checkout>/src. For a manual run, invoke it the same way:
+--   cd vendor/pob/<game>/src && luajit <path to this file>
 --
 -- Protocol: one JSON object per stdin line -> one JSON object per stdout
 -- line. Engine noise goes to stderr; after boot the adapter prints a
