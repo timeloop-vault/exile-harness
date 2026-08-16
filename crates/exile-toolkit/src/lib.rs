@@ -179,6 +179,121 @@ impl HttpGet for CachedHttp {
     }
 }
 
+/// A body served by [`VintageCache`], carrying its provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VintageFetch {
+    /// The response body.
+    pub body: String,
+    /// When the body was actually retrieved from the live source.
+    pub retrieved_at: String,
+    /// Whether this call was served from the local cache.
+    pub from_cache: bool,
+}
+
+/// Disk-backed response cache with vintage stamps — the Tier-B pattern:
+/// cached corpora are fine as long as every answer can say how old its
+/// data is. Entries are one JSON file per URL under `dir`, expiring
+/// after `ttl` (a forced refresh bypasses the cache). Errors are never
+/// cached; a corrupt or unreadable entry falls back to a live fetch.
+pub struct VintageCache {
+    inner: Box<dyn HttpGet>,
+    dir: std::path::PathBuf,
+    ttl: Duration,
+}
+
+impl VintageCache {
+    /// Cache wrapping `inner`, storing entries under `dir`.
+    #[must_use]
+    pub fn new(inner: Box<dyn HttpGet>, dir: std::path::PathBuf, ttl: Duration) -> Self {
+        Self { inner, dir, ttl }
+    }
+
+    /// Fetch `url` live, bypassing and never touching the cache — for
+    /// request kinds that must stay uncached (searches, volatile data)
+    /// on the same transport.
+    pub fn live(&self, url: &str) -> Result<String, String> {
+        self.inner.get(url)
+    }
+
+    /// Fetch `url`, serving from disk when a fresh entry exists and
+    /// `refresh` is false.
+    pub fn get(&self, url: &str, refresh: bool) -> Result<VintageFetch, String> {
+        let path = self
+            .dir
+            .join(format!("{:016x}.json", fnv1a64(url.as_bytes())));
+        if !refresh
+            && let Some(entry) = read_entry(&path, url)
+            && !entry_expired(&entry.retrieved_at, self.ttl)
+        {
+            return Ok(VintageFetch {
+                body: entry.body,
+                retrieved_at: entry.retrieved_at,
+                from_cache: true,
+            });
+        }
+
+        let body = self.inner.get(url)?;
+        let retrieved_at = now_utc();
+        // Best effort: a failed write only costs the caching, never the
+        // fetch. The entry records its URL so hash collisions can never
+        // serve the wrong page.
+        if std::fs::create_dir_all(&self.dir).is_ok() {
+            let entry = serde_json::json!({
+                "url": url,
+                "retrieved_at": retrieved_at,
+                "body": body,
+            });
+            let _ = std::fs::write(&path, entry.to_string());
+        }
+        Ok(VintageFetch {
+            body,
+            retrieved_at,
+            from_cache: false,
+        })
+    }
+}
+
+struct DiskEntry {
+    retrieved_at: String,
+    body: String,
+}
+
+fn read_entry(path: &std::path::Path, url: &str) -> Option<DiskEntry> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if value["url"].as_str() != Some(url) {
+        return None;
+    }
+    Some(DiskEntry {
+        retrieved_at: value["retrieved_at"].as_str()?.to_owned(),
+        body: value["body"].as_str()?.to_owned(),
+    })
+}
+
+/// An entry is expired when its stamp fails to parse or is older than
+/// `ttl` — unparseable vintage means unknown vintage, and Tier B never
+/// serves data of unknown age.
+fn entry_expired(retrieved_at: &str, ttl: Duration) -> bool {
+    let Ok(stamp) = retrieved_at.parse::<jiff::Timestamp>() else {
+        return true;
+    };
+    let Ok(ttl) = jiff::SignedDuration::try_from(ttl) else {
+        return true;
+    };
+    jiff::Timestamp::now().duration_since(stamp) >= ttl
+}
+
+/// FNV-1a 64-bit — a stable, dependency-free filename hash (collisions
+/// are handled by the URL check in [`read_entry`], not by the hash).
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in data {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// Current UTC time as `YYYY-MM-DDTHH:MM:SSZ`, for `fetched_at` stamps.
 #[must_use]
 pub fn now_utc() -> String {
@@ -321,6 +436,101 @@ mod tests {
             assert!(cache.get(url).is_ok());
             assert_eq!(cache.entries.lock().expect("lock").len(), 1);
         }
+    }
+
+    #[test]
+    fn vintage_cache_serves_stamped_repeats_and_honors_refresh() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        struct Counting {
+            calls: Arc<AtomicUsize>,
+        }
+        impl HttpGet for Counting {
+            fn get(&self, _url: &str) -> Result<String, String> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("body-{n}"))
+            }
+        }
+
+        let dir =
+            std::env::temp_dir().join(format!("exile-toolkit-test-vintage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = super::VintageCache::new(
+            Box::new(Counting {
+                calls: Arc::clone(&calls),
+            }),
+            dir.clone(),
+            Duration::from_mins(5),
+        );
+
+        let first = cache.get("https://x/page", false).expect("live fetch");
+        assert!(!first.from_cache);
+        assert_eq!(first.body, "body-0");
+
+        // Second call: served from disk, same body, same vintage stamp.
+        let second = cache.get("https://x/page", false).expect("cache hit");
+        assert!(second.from_cache);
+        assert_eq!(second.body, "body-0");
+        assert_eq!(second.retrieved_at, first.retrieved_at);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // A different URL never collides into the same entry.
+        let other = cache.get("https://x/other", false).expect("live fetch");
+        assert!(!other.from_cache);
+
+        // refresh bypasses a valid cache entry.
+        let forced = cache.get("https://x/page", true).expect("refetch");
+        assert!(!forced.from_cache);
+        assert_eq!(forced.body, "body-2");
+
+        // Zero TTL: everything is expired, upstream is hit again.
+        let cache = super::VintageCache::new(
+            Box::new(Counting {
+                calls: Arc::clone(&calls),
+            }),
+            dir.clone(),
+            Duration::ZERO,
+        );
+        let expired = cache.get("https://x/page", false).expect("expired refetch");
+        assert!(!expired.from_cache);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vintage_cache_survives_corrupt_entries_and_never_caches_errors() {
+        use std::time::Duration;
+        let dir =
+            std::env::temp_dir().join(format!("exile-toolkit-test-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Corrupt entry on disk: fall back to a live fetch.
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join(format!(
+            "{:016x}.json",
+            super::fnv1a64("https://x/page".as_bytes())
+        ));
+        std::fs::write(&path, "not json at all").expect("write");
+        let cache = super::VintageCache::new(
+            Box::new(FakeHttp {
+                routes: vec![("x/page", "live body")],
+            }),
+            dir.clone(),
+            Duration::from_mins(5),
+        );
+        let fetched = cache.get("https://x/page", false).expect("live fallback");
+        assert!(!fetched.from_cache);
+        assert_eq!(fetched.body, "live body");
+
+        // Errors are never cached: a failing upstream stays failing.
+        let cache =
+            super::VintageCache::new(Box::new(FailHttp), dir.clone(), Duration::from_mins(5));
+        assert!(cache.get("https://x/missing", false).is_err());
+        assert!(cache.get("https://x/missing", false).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
