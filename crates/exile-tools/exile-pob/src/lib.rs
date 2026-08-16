@@ -263,9 +263,12 @@ impl Tool for PobTool {
          Optionally list `stats` keys to read specific values. For what-if questions \
          (\"how much would 30% more spell damage give me?\"), pass the hypothetical \
          modifier lines in `custom_mods` and compare against a call without them — never \
-         combine modifiers by hand, because `increased` modifiers stack with everything \
-         the build already has. Codes and XML are per-game: never feed one game's build \
-         to the other."
+         combine modifiers by hand and never state breakpoints or rules of thumb, \
+         because `increased` modifiers stack with everything the build already has. \
+         Modifier effects only show on a build with an active skill, so when the user \
+         has not provided a build, ask for their share code or build XML first instead \
+         of answering from memory. Codes and XML are per-game: never feed one game's \
+         build to the other."
     }
 
     fn parameters_schema(&self) -> &'static str {
