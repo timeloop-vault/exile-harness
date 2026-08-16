@@ -1,0 +1,23 @@
+[package]
+name = "exile-pob"
+description = "Build calculation tool over stock Path of Building engines for PoE 1 and 2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "exile-pob"
+path = "src/main.rs"
+
+[dependencies]
+exile-tool-api.workspace = true
+exile-toolkit.workspace = true
+flate2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

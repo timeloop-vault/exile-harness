@@ -15,6 +15,7 @@ exile-core.workspace = true
 exile-league.workspace = true
 exile-llm.workspace = true
 exile-ninja.workspace = true
+exile-pob.workspace = true
 exile-wiki.workspace = true
 exile-tool-api.workspace = true
 serde.workspace = true
