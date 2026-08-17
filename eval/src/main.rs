@@ -132,6 +132,44 @@ enum Expect {
         /// Minimal synthetic build XML (an input fixture).
         xml: String,
     },
+    /// Answer must contain the named stat's what-if `delta`, computed by
+    /// the `pob_whatif` tool at eval time on a synthetic build with the
+    /// given hypothetical modifier lines.
+    PobWhatifDelta {
+        /// `poe1` | `poe2`.
+        game: String,
+        /// The stat whose `delta` is graded (e.g. `Life`).
+        stat: String,
+        /// Minimal synthetic build XML (an input fixture).
+        xml: String,
+        /// Hypothetical modifier lines applied by the tool.
+        mods: Vec<String>,
+    },
+}
+
+/// Render a JSON number the way a model would say it: whole numbers
+/// without a trailing `.0`, so digit-boundary grading matches.
+fn number_string(value: &Value) -> Option<String> {
+    if let Some(whole) = value.as_i64() {
+        return Some(whole.to_string());
+    }
+    let number = value.as_f64()?;
+    if number.fract() == 0.0 {
+        Some(format!("{number:.0}"))
+    } else {
+        Some(number.to_string())
+    }
+}
+
+/// The renderings of a numeric ground truth a model may legitimately
+/// quote: an integral value appears both as `12` (prose) and `12.0`
+/// (verbatim from the tool's JSON).
+fn number_variants(expected: &str) -> Vec<String> {
+    let mut variants = vec![expected.to_owned()];
+    if !expected.is_empty() && expected.chars().all(|c| c.is_ascii_digit()) {
+        variants.push(format!("{expected}.0"));
+    }
+    variants
 }
 
 /// A resolved grading rule for one question.
@@ -182,15 +220,29 @@ fn answer_matches(answer: &str, grading: &Grading) -> bool {
 
 fn value_present(answer_lower: &str, value: &str) -> bool {
     let value = value.to_lowercase();
-    if value.chars().all(|c| c.is_ascii_digit()) {
+    // Numeric literals (integers and decimals) require number
+    // boundaries: an expected "12.4" must not match inside "112.4" or
+    // "12.45", just as "60" must not match "-160".
+    let numeric = !value.is_empty()
+        && value.chars().any(|c| c.is_ascii_digit())
+        && value.chars().all(|c| c.is_ascii_digit() || c == '.');
+    if numeric {
         let bytes = answer_lower.as_bytes();
         let mut search = 0;
         while let Some(position) = answer_lower[search..].find(&value) {
             let start = search + position;
             let end = start + value.len();
-            let digit_before = start > 0 && bytes[start - 1].is_ascii_digit();
-            let digit_after = end < bytes.len() && bytes[end].is_ascii_digit();
-            if !digit_before && !digit_after {
+            // Joined on the left by a digit or a decimal point ("3.75",
+            // ".75" — the found "75" is part of a different number).
+            let joined_before =
+                start > 0 && (bytes[start - 1].is_ascii_digit() || bytes[start - 1] == b'.');
+            // Joined on the right by a digit, or by a decimal point that
+            // continues into digits ("75.4") — a sentence-ending "75."
+            // is a boundary, not a join.
+            let joined_after = end < bytes.len()
+                && (bytes[end].is_ascii_digit()
+                    || (bytes[end] == b'.' && bytes.get(end + 1).is_some_and(u8::is_ascii_digit)));
+            if !joined_before && !joined_after {
                 return true;
             }
             search = start + 1;
@@ -208,6 +260,7 @@ fn resolve_question(
     question: &Question,
     league: &dyn Tool,
     pob: &dyn Tool,
+    whatif: &dyn Tool,
 ) -> Result<(Grading, String), String> {
     let prompt = question.prompt.clone();
     match &question.expect {
@@ -237,20 +290,60 @@ fn resolve_question(
                 .execute(&request.to_string())
                 .map_err(|err| format!("ground-truth pob call failed: {err}"))?;
             let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
-            let value = &result["build"]["stats"][stat];
-            let expected = value
-                .as_i64()
-                .map(|whole| whole.to_string())
-                .or_else(|| value.as_f64().map(|number| number.to_string()))
+            let expected = number_string(&result["build"]["stats"][stat])
                 .ok_or_else(|| format!("stat `{stat}` missing from pob result"))?;
             let code = exile_pob::codes::encode(xml)
                 .map_err(|err| format!("encoding fixture build failed: {err}"))?;
-            Ok((
-                Grading::Any(vec![expected]),
-                prompt.replace("{code}", &code).replace("{xml}", xml),
-            ))
+            let prompt = prompt.replace("{code}", &code).replace("{xml}", xml);
+            ensure_not_prompt_echo(&expected, &prompt)?;
+            Ok((Grading::Any(number_variants(&expected)), prompt))
+        }
+        Expect::PobWhatifDelta {
+            game,
+            stat,
+            xml,
+            mods,
+        } => {
+            let request = serde_json::json!({
+                "game": game, "xml": xml, "custom_mods": mods, "stats": [stat],
+            });
+            let result = whatif
+                .execute(&request.to_string())
+                .map_err(|err| format!("ground-truth pob_whatif call failed: {err}"))?;
+            let result: Value = serde_json::from_str(&result).map_err(|err| err.to_string())?;
+            let delta = result["whatif"]["stats"][stat]["delta"]
+                .as_f64()
+                .ok_or_else(|| format!("delta for `{stat}` missing from whatif result"))?;
+            // The bank's what-if probes are strict-increase questions; a
+            // non-positive delta means the injected mods had no effect
+            // (a regression this guard exists to catch) and "0" would
+            // grade almost any cooperative answer as correct.
+            if delta <= 0.0 {
+                return Err(format!(
+                    "whatif delta for `{stat}` is {delta} — the injected custom_mods had \
+                     no effect; refusing to grade against it"
+                ));
+            }
+            let expected = number_string(&result["whatif"]["stats"][stat]["delta"])
+                .ok_or_else(|| format!("delta for `{stat}` missing from whatif result"))?;
+            let prompt = prompt.replace("{xml}", xml);
+            ensure_not_prompt_echo(&expected, &prompt)?;
+            Ok((Grading::Any(number_variants(&expected)), prompt))
         }
     }
+}
+
+/// A ground-truth value that already appears in the substituted prompt
+/// could be echoed back without any tool use; fail resolution loudly so
+/// the fixture gets adjusted instead of silently weakening the question.
+fn ensure_not_prompt_echo(expected: &str, prompt: &str) -> Result<(), String> {
+    if value_present(&prompt.to_lowercase(), expected) {
+        return Err(format!(
+            "expected value `{expected}` already appears in the question prompt — an echo \
+             could false-pass; adjust the fixture"
+        ));
+    }
+    Ok(())
 }
 
 /// Run [`ask`] on its own thread with a wall-clock budget. On timeout the
@@ -301,9 +394,18 @@ fn ask(
     registry
         .register(Box::new(exile_ninja::PriceTool::new()))
         .expect("price tool name is unique");
+    // The pob family shares one engine host WITHIN this question's
+    // registry (each question builds a fresh session, so engine warmth
+    // does not span questions — a deliberate isolation/cost trade-off).
+    let pob_host = std::sync::Arc::new(exile_pob::EngineHost::new());
     registry
-        .register(Box::new(exile_pob::PobTool::new()))
+        .register(Box::new(exile_pob::PobTool::with_host(
+            std::sync::Arc::clone(&pob_host),
+        )))
         .expect("pob tool name is unique");
+    registry
+        .register(Box::new(exile_pob::PobWhatifTool::with_host(pob_host)))
+        .expect("pob_whatif tool name is unique");
     let client = OpenAiClient::for_profile(profile)?;
     let mut session = Session::with_model(registry, Box::new(client), SYSTEM_PROMPT.to_owned());
     if let Some(rounds) = max_tool_rounds {
@@ -346,6 +448,21 @@ fn parse_args(
     Ok((config_path, profile, only))
 }
 
+/// The tools ground truth is resolved from (law 1: expectations come
+/// from tools at eval time). The pob family shares one engine host.
+fn ground_truth_tools() -> (
+    exile_league::LeagueTool,
+    exile_pob::PobTool,
+    exile_pob::PobWhatifTool,
+) {
+    let host = std::sync::Arc::new(exile_pob::EngineHost::new());
+    (
+        exile_league::LeagueTool::new(),
+        exile_pob::PobTool::with_host(std::sync::Arc::clone(&host)),
+        exile_pob::PobWhatifTool::with_host(host),
+    )
+}
+
 fn main() -> ExitCode {
     let (config_path, profile_name, only) = match parse_args(std::env::args().skip(1)) {
         Ok(parsed) => parsed,
@@ -381,8 +498,7 @@ fn main() -> ExitCode {
     let max_tool_rounds = config.limits.max_tool_rounds;
     let profile = &profile;
     let file: QuestionFile = toml::from_str(QUESTIONS).expect("questions.toml is pinned by tests");
-    let ground_truth_league = exile_league::LeagueTool::new();
-    let ground_truth_pob = exile_pob::PobTool::new();
+    let (ground_truth_league, ground_truth_pob, ground_truth_whatif) = ground_truth_tools();
 
     let selected: Vec<&Question> = file
         .questions
@@ -405,15 +521,19 @@ fn main() -> ExitCode {
             println!("SKIP {} — parked: {reason}", question.id);
             continue;
         }
-        let (accepted, prompt) =
-            match resolve_question(question, &ground_truth_league, &ground_truth_pob) {
-                Ok(resolved) => resolved,
-                Err(err) => {
-                    failures += 1;
-                    println!("FAIL {} — ground truth unavailable: {err}", question.id);
-                    continue;
-                }
-            };
+        let (accepted, prompt) = match resolve_question(
+            question,
+            &ground_truth_league,
+            &ground_truth_pob,
+            &ground_truth_whatif,
+        ) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                failures += 1;
+                println!("FAIL {} — ground truth unavailable: {err}", question.id);
+                continue;
+            }
+        };
         match ask_with_budget(profile, max_tool_rounds, &prompt) {
             Err(err) => {
                 failures += 1;
@@ -538,6 +658,14 @@ mod tests {
         let sixty = Grading::Any(vec!["60".to_owned()]);
         assert!(!answer_matches("a total of -160%", &sixty), "160 is not 60");
         assert!(answer_matches("a total of -60%", &sixty));
+
+        // Fractional expecteds get the same number boundaries.
+        let fractional = Grading::Any(vec!["12.4".to_owned()]);
+        assert!(answer_matches("the delta is 12.4 life", &fractional));
+        assert!(answer_matches("gain: 12.4.", &fractional));
+        assert!(!answer_matches("gain 112.4 total", &fractional), "112.4");
+        assert!(!answer_matches("gain 12.45 total", &fractional), "12.45");
+        assert!(!answer_matches("gain 12.412", &fractional), "12.412");
 
         // Non-numeric values keep plain substring behavior.
         let text = Grading::Any(vec!["additive".to_owned()]);

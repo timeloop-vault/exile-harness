@@ -141,17 +141,29 @@ end
 
 local handlers = {}
 
+-- The poe1 engine wipes its global (FullDPS) cache in Build:Init; the
+-- poe2 fork does NOT, so consecutive loads on a warm child would share
+-- stale cache entries. Wipe before every load — a no-op-safe guard on
+-- engines that already do it themselves.
+local function freshBuildState()
+    if wipeGlobalCache then
+        wipeGlobalCache()
+    end
+end
+
 function handlers.version()
     return { engine = tostring(launch and launch.versionNumber or "unknown") }
 end
 
 function handlers.new()
+    freshBuildState()
     newBuild()
     return { loaded = true }
 end
 
 function handlers.loadXML(params)
     assert(type(params.xml) == "string" and #params.xml > 0, "`xml` (string) required")
+    freshBuildState()
     loadBuildFromXML(params.xml, params.name or "adapter")
     return { loaded = true }
 end
@@ -163,6 +175,7 @@ function handlers.loadCode(params)
     assert(compressed, "invalid base64 in build code")
     local xml, err = Inflate(compressed)
     assert(xml and #xml > 0, "build code did not inflate: " .. tostring(err))
+    freshBuildState()
     loadBuildFromXML(xml, params.name or "adapter")
     return { loaded = true }
 end

@@ -11,6 +11,7 @@ use exile_tool_api::Tool;
 use exile_toolkit::Game;
 
 const USAGE: &str = "usage: exile-pob <poe1|poe2> <build-code> [stat...]\n       \
+                     exile-pob whatif <poe1|poe2> <build-code> <modifier line>...\n       \
                      exile-pob encode <xml-file>\n       \
                      exile-pob fetch [--game <poe1|poe2>] [--ref <ref>] [--root <dir>] [--force]";
 
@@ -19,9 +20,26 @@ fn main() -> ExitCode {
     match argv.first().map(String::as_str) {
         Some("encode") => encode(&argv[1..]),
         Some("fetch") => fetch(&argv[1..]),
+        Some("whatif") => whatif(&argv[1..]),
         Some("poe1" | "poe2") => query(&argv),
         _ => {
             eprintln!("{USAGE}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_tool(tool: &dyn Tool, request: &serde_json::Value) -> ExitCode {
+    match tool.execute(&request.to_string()) {
+        Ok(result) => {
+            let pretty = serde_json::from_str::<serde_json::Value>(&result)
+                .and_then(|value| serde_json::to_string_pretty(&value))
+                .unwrap_or(result);
+            println!("{pretty}");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
             ExitCode::FAILURE
         }
     }
@@ -39,21 +57,26 @@ fn query(argv: &[String]) -> ExitCode {
     if argv.len() > 2 {
         request["stats"] = serde_json::json!(argv[2..]);
     }
+    run_tool(&PobTool::new(), &request)
+}
 
-    let tool = PobTool::new();
-    match tool.execute(&request.to_string()) {
-        Ok(result) => {
-            let pretty = serde_json::from_str::<serde_json::Value>(&result)
-                .and_then(|value| serde_json::to_string_pretty(&value))
-                .unwrap_or(result);
-            println!("{pretty}");
-            ExitCode::SUCCESS
-        }
-        Err(err) => {
-            eprintln!("error: {err}");
-            ExitCode::FAILURE
-        }
+fn whatif(argv: &[String]) -> ExitCode {
+    let (Some(game @ ("poe1" | "poe2")), Some(code)) =
+        (argv.first().map(String::as_str), argv.get(1))
+    else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    if argv.len() < 3 {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
     }
+    let request = serde_json::json!({
+        "game": game,
+        "code": code,
+        "custom_mods": argv[2..],
+    });
+    run_tool(&exile_pob::PobWhatifTool::new(), &request)
 }
 
 /// Dev utility: turn a build XML file into a share code (the inverse of

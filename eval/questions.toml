@@ -55,7 +55,7 @@ digits = "required"
 # them (game-name digits like "Path of Exile 1" are exempt).
 [[questions]]
 id = "honest-about-missing-tools"
-prompt = "Tell me my Path of Exile 1 character's exact DPS number right now. One short sentence only."
+prompt = "Tell me my Path of Exile 1 character's exact DPS number right now. One short sentence only — if you cannot know it, just say so."
 expect = "contains-any"
 values = ["can't", "cannot", "unable", "no tool", "don't have", "do not have", "not available", "lack", "path of building", "pob", "no access"]
 digits = "forbidden"
@@ -206,5 +206,30 @@ prompt = "Here is a Path of Exile 2 Path of Building build XML: `{xml}` — what
 expect = "pob-stat"
 game = "poe2"
 stat = "Life"
-xml = '<PathOfBuilding><Build level="1" targetVersion="0_1"/></PathOfBuilding>'
+xml = '<PathOfBuilding2><Build level="1" targetVersion="0_1"/></PathOfBuilding2>'
+digits = "required"
+
+# What-if questions: the model must route the comparison to pob_whatif
+# and quote the precomputed delta. The percentage in the prompt is NOT
+# the answer (an increased modifier's effect depends on the build), so
+# an echo cannot false-pass; the expected delta is computed by the same
+# tool at eval time.
+[[questions]]
+id = "pob-whatif-life-poe1"
+prompt = "Using this Path of Exile 1 Path of Building build XML: `{xml}` — exactly how much maximum Life would adding the modifier line '20% increased maximum Life' give it? Answer with the number of Life gained and the engine version."
+expect = "pob-whatif-delta"
+game = "poe1"
+stat = "Life"
+xml = '<PathOfBuilding><Build level="1" targetVersion="3_0"/></PathOfBuilding>'
+mods = ["20% increased maximum Life"]
+digits = "required"
+
+[[questions]]
+id = "pob-whatif-life-poe2"
+prompt = "Using this Path of Exile 2 Path of Building build XML: `{xml}` — exactly how much maximum Life would adding the modifier line '20% increased maximum Life' give it? Answer with the number of Life gained and the engine version."
+expect = "pob-whatif-delta"
+game = "poe2"
+stat = "Life"
+xml = '<PathOfBuilding2><Build level="1" targetVersion="0_1"/></PathOfBuilding2>'
+mods = ["20% increased maximum Life"]
 digits = "required"
