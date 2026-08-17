@@ -168,6 +168,31 @@ impl PriceTool {
         if let Some(currency) = primary_currency {
             out.insert("primary_currency".to_owned(), json!(currency));
         }
+        // A zero-match name lookup is usually a wrong-category guess, not
+        // an untracked item. The hint is self-contained (small models act
+        // on the last tool result, not on description cross-references —
+        // observed live) and repeats only the endpoint-schema category
+        // names the tool description already carries.
+        if matches.is_empty() && name_filter.is_some() && !lines.is_empty() {
+            let categories = match args.game {
+                Game::Poe1 => {
+                    "Currency, Fragment, UniqueWeapon, UniqueArmour, UniqueAccessory, \
+                     UniqueFlask, UniqueJewel, DivinationCard, SkillGem"
+                }
+                Game::Poe2 => {
+                    "Currency, Fragments, UniqueWeapons, UniqueArmours, UniqueAccessories, \
+                     UniqueJewels"
+                }
+            };
+            out.insert(
+                "hint".to_owned(),
+                json!(format!(
+                    "no name matches in this category, but the category itself has listings — \
+                     the item is likely under a DIFFERENT category. Before concluding it is \
+                     untracked, retry the same name in each remaining category: {categories}"
+                )),
+            );
+        }
         out.insert("total_matches".to_owned(), json!(matches.len()));
         out.insert("returned".to_owned(), json!(trimmed.len()));
         out.insert("lines".to_owned(), json!(trimmed));
@@ -479,6 +504,42 @@ mod tests {
         assert!(line.get("icon").is_none(), "noise fields must be trimmed");
         assert!(line.get("explicitModifiers").is_none());
         assert!(result["fetched_at"].as_str().expect("stamp").contains('T'));
+    }
+
+    #[test]
+    fn zero_name_matches_in_a_live_category_carry_a_retry_hint() {
+        let tool = tool(vec![("stash/current/item/overview", ITEM_FIXTURE)]);
+        let result = parse(
+            &tool
+                .execute(
+                    r#"{"game":"poe1","league":"Testleague","category":"UniqueWeapon","name":"voidforge"}"#,
+                )
+                .expect("executes"),
+        );
+        assert_eq!(result["prices"]["total_matches"], 0);
+        assert!(
+            result["prices"]["hint"]
+                .as_str()
+                .expect("hint present")
+                .contains("DIFFERENT category"),
+            "wrong-category guesses need a recovery hint"
+        );
+
+        // No hint when the filter DID match, or when there was no filter.
+        let matched = parse(
+            &tool
+                .execute(
+                    r#"{"game":"poe1","league":"Testleague","category":"UniqueWeapon","name":"entropy"}"#,
+                )
+                .expect("executes"),
+        );
+        assert!(matched["prices"]["hint"].is_null());
+        let unfiltered = parse(
+            &tool
+                .execute(r#"{"game":"poe1","league":"Testleague","category":"UniqueWeapon"}"#)
+                .expect("executes"),
+        );
+        assert!(unfiltered["prices"]["hint"].is_null());
     }
 
     #[test]
