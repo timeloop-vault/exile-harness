@@ -151,9 +151,17 @@ fn build_registry() -> ToolRegistry {
     registry
         .register(Box::new(exile_ninja::PriceTool::new()))
         .expect("price tool name is unique");
+    // The pob family shares one engine host, so several tools cost one
+    // warm engine per game.
+    let pob_host = std::sync::Arc::new(exile_pob::EngineHost::new());
     registry
-        .register(Box::new(exile_pob::PobTool::new()))
+        .register(Box::new(exile_pob::PobTool::with_host(
+            std::sync::Arc::clone(&pob_host),
+        )))
         .expect("pob tool name is unique");
+    registry
+        .register(Box::new(exile_pob::PobWhatifTool::with_host(pob_host)))
+        .expect("pob_whatif tool name is unique");
     registry
 }
 
